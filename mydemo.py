@@ -11,6 +11,7 @@ import cv2
 import numpy as np
 from PIL import Image
 from yolo import YOLO
+from intersection import any_intersection
 
 from deep_sort import preprocessing
 from deep_sort import nn_matching
@@ -20,7 +21,9 @@ from tools import generate_detections as gdet
 from deep_sort.detection import Detection as ddet
 warnings.filterwarnings('ignore')
 
+
 def main(yolo):
+    basedir = os.getenv('DEEPSORTHOME','.')
     if len(os.sys.argv) < 3:
         print("requires: <input file> <output file>")
         quit()
@@ -34,12 +37,23 @@ def main(yolo):
     nms_max_overlap = 1.0
     
    # deep_sort 
-    model_filename = 'model_data/mars-small128.pb'
+    model_filename = '{}/model_data/mars-small128.pb'.format(basedir)
     encoder = gdet.create_box_encoder(model_filename,batch_size=1)
     
     metric = nn_matching.NearestNeighborDistanceMetric("cosine", max_cosine_distance, nn_budget)
     tracker = Tracker(metric)
+    delcount=0
     db = {}
+    def check_track(i, frame=None):
+        nonlocal delcount
+        if i in db and len(db[i]) > 1:
+            if any_intersection(countline[0], countline[1], np.array(db[i])):
+                if frame is not None:
+                    pts = np.array(db[i]).reshape((-1,1,2))
+                    cv2.polylines(frame, [np.int32(pts)], False, [0,0,255], 6)
+                delcount+=1
+                print("delcount={}".format(delcount))
+            db[i] = []
 
     writeVideo_flag = True 
     
@@ -55,11 +69,13 @@ def main(yolo):
         image_height = h
         fourcc = cv2.VideoWriter_fourcc(*'H264')
         out = cv2.VideoWriter(output_filename, fourcc, 15, (w, h))
-        list_file = open('detection.txt', 'w')
+        #list_file = open('detection.txt', 'w')
         frame_index = -1 
         
+    countline = np.array([[0,3*h/4],[w,3*h/4]],dtype=int)
+
     fps = 0.0
-    delcount=0
+
     while True:
         ret, frame = video_capture.read()  # frame shape 640*480*3
         if ret != True:
@@ -96,16 +112,17 @@ def main(yolo):
         t1trac = time.time()
         tracker.predict()
         tracker.update(detections)
- 
+        a = (countline[0,0], countline[0,1])
+        b = (countline[1,0], countline[1,1])
+        cv2.line(frame, a, b, (0,0,255), 3)
+        for track in tracker.deleted_tracks:
+            i = track.track_id
+            if track.is_deleted():
+                check_track(track.track_id, frame)
+
         for track in tracker.tracks:
             i = track.track_id
             if not track.is_confirmed() or track.time_since_update > 1:
-                if i in db and len(db[i]) > 1:
-                    pts = np.array(db[i]).reshape((-1,1,2))
-                    cv2.polylines(frame, [np.int32(pts)], False, [0,0,255], 6)
-                    delcount+=1
-                    db[i] = []
-                    print("delcount={}".format(delcount))
                 continue
             if i not in db:
                 db[i] = []
@@ -129,11 +146,11 @@ def main(yolo):
             # save a frame
             out.write(frame)
             frame_index = frame_index + 1
-            list_file.write(str(frame_index)+' ')
-            if len(boxs) != 0:
-                for i in range(0,len(boxs)):
-                    list_file.write(str(boxs[i][0]) + ' '+str(boxs[i][1]) + ' '+str(boxs[i][2]) + ' '+str(boxs[i][3]) + ' ')
-            list_file.write('\n')
+            #list_file.write(str(frame_index)+' ')
+            #if len(boxs) != 0:
+            #   for i in range(0,len(boxs)):
+            #       list_file.write(str(boxs[i][0]) + ' '+str(boxs[i][1]) + ' '+str(boxs[i][2]) + ' '+str(boxs[i][3]) + ' ')
+            #list_file.write('\n')
             
         #fps  = ( fps + (1./(time.time()-t1)) ) / 2
         #print("fps= %f"%(fps))
@@ -144,10 +161,14 @@ def main(yolo):
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
 
+    for track in tracker.tracks:
+        check_track(track.track_id)
+
+    print(delcount)
     video_capture.release()
     if writeVideo_flag:
         out.release()
-        list_file.close()
+        #list_file.close()
     cv2.destroyAllWindows()
 
 if __name__ == '__main__':
