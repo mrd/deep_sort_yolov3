@@ -1,0 +1,21 @@
+FROM python:3.7
+
+RUN pip install opencv-python-nonfree opencv-contrib-python-nonfree
+
+COPY guess_translation.py /
+
+ENV DEBIAN_FRONTEND=noninteractive
+ARG USER_ID
+ARG GROUP_ID
+
+RUN addgroup --gid $GROUP_ID user
+RUN adduser --disabled-password --gecos '' --uid $USER_ID --gid $GROUP_ID user
+
+RUN mkdir -p /work
+RUN chown -R user:user /work # /yolo
+
+USER user
+
+WORKDIR /work
+
+CMD /bin/bash
