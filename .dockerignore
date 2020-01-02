@@ -1,0 +1,10 @@
+*
+!*.py
+!yolo3/*.py
+!tools/*.py
+!deep_sort/*.py
+!yolov3.cfg
+!model_data/*.txt
+!model_data/*.pb
+
+

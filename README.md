@@ -1,3 +1,11 @@
+mrd notes:
+
+./build-count.sh
+./count.sh [--line x1,y1,x2,y2] input.mp4 output.mp4
+
+
+
+
 QQ group: 姿态检测＆跟踪 781184396
 
 # Introduction
