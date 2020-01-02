@@ -36,7 +36,7 @@ def main(yolo):
 
     writeVideo_flag = True 
     
-    video_capture = cv2.VideoCapture(0)
+    video_capture = cv2.VideoCapture('jaarbeursplein.mp4')
 
     if writeVideo_flag:
     # Define the codec and create VideoWriter object
@@ -55,24 +55,35 @@ def main(yolo):
         t1 = time.time()
 
        # image = Image.fromarray(frame)
+        t1yolo = time.time()
+        # following line accounts for about 15-20ms
         image = Image.fromarray(frame[...,::-1]) #bgr to rgb
+        # YOLO accounts for about 40ms on ponder.cl
         boxs = yolo.detect_image(image)
-       # print("box_num",len(boxs))
+        t2yolo = time.time()
+        # the rest is inconsequential in performance, apart from writes to disk
+
+        # print("box_num",len(boxs))
+        t1feat = t2yolo
         features = encoder(frame,boxs)
+        t2feat = time.time()
         
         # score to 1.0 here).
         detections = [Detection(bbox, 1.0, feature) for bbox, feature in zip(boxs, features)]
         
         # Run non-maxima suppression.
+        t1prep = time.time()
         boxes = np.array([d.tlwh for d in detections])
         scores = np.array([d.confidence for d in detections])
         indices = preprocessing.non_max_suppression(boxes, nms_max_overlap, scores)
         detections = [detections[i] for i in indices]
+        t2prep = time.time()
         
         # Call the tracker
+        t1trac = time.time()
         tracker.predict()
         tracker.update(detections)
-        
+ 
         for track in tracker.tracks:
             if not track.is_confirmed() or track.time_since_update > 1:
                 continue 
@@ -86,6 +97,7 @@ def main(yolo):
             
         cv2.imshow('', frame)
         
+        t2trac = time.time()
         if writeVideo_flag:
             # save a frame
             out.write(frame)
@@ -96,8 +108,10 @@ def main(yolo):
                     list_file.write(str(boxs[i][0]) + ' '+str(boxs[i][1]) + ' '+str(boxs[i][2]) + ' '+str(boxs[i][3]) + ' ')
             list_file.write('\n')
             
-        fps  = ( fps + (1./(time.time()-t1)) ) / 2
-        print("fps= %f"%(fps))
+        #fps  = ( fps + (1./(time.time()-t1)) ) / 2
+        #print("fps= %f"%(fps))
+        t2 = time.time()
+        print("Frame processing time={:.0f}ms (yolo={:.0f}ms prep={:.0f}ms feat={:.0f}ms trac={:.0f}ms)".format(1000*(t2 - t1), 1000*(t2yolo - t1yolo), 1000*(t2prep - t1prep), 1000*(t2feat - t1feat), 1000*(t2trac - t1trac)))
         
         # Press Q to stop!
         if cv2.waitKey(1) & 0xFF == ord('q'):
