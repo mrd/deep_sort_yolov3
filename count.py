@@ -27,6 +27,8 @@ def main(yolo):
     parser = argparse.ArgumentParser()
     parser.add_argument('input', help="input file")
     parser.add_argument('output', help="output file")
+    parser.add_argument('--show', help="show intermediate results on screen",
+                        action='store_true')
     parser.add_argument('--line', '-L', help="counting line: x1,y1,x2,y2",
                         default=None)
     args = parser.parse_args()
@@ -147,7 +149,8 @@ def main(yolo):
             cv2.rectangle(frame,(int(bbox[0]), int(bbox[1])), (int(bbox[2]), int(bbox[3])),(255,0,0), 2)
             
         cv2.putText(frame, str(delcount),(0, image_height-5),0, 5e-3 * 200, (0,0,255),2)
-        #cv2.imshow('', frame)
+        if args.show:
+            cv2.imshow('', frame)
         
         t2trac = time.time()
         if writeVideo_flag:
@@ -177,7 +180,8 @@ def main(yolo):
     if writeVideo_flag:
         out.release()
         #list_file.close()
-    #cv2.destroyAllWindows()
+    if args.show:
+        cv2.destroyAllWindows()
 
 if __name__ == '__main__':
     main(YOLO())
