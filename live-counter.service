@@ -1,0 +1,9 @@
+[Unit]
+Description = Live counter
+After = network.target
+
+[Service]
+ExecStart = /home/pirate/deep_sort_yolov3/live-counter-service.sh
+
+[Install]
+WantedBy = multi-user.target
