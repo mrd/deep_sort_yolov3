@@ -30,11 +30,29 @@ from deep_sort.detection import Detection
 from deep_sort.tracker import Tracker
 from tools import generate_detections as gdet
 from deep_sort.detection import Detection as ddet
+import threading
+
 warnings.filterwarnings('ignore')
 
 class SigTerm(SystemExit): pass
 def sigterm(sig,frm): raise SigTerm
 signal.signal(15,sigterm)
+
+class MBox:
+    def __init__(self):
+        self.message = None
+        self.lock = threading.Lock()
+
+    def get_message(self):
+        self.lock.acquire()
+        message = self.message
+        self.lock.release()
+        return message
+
+    def set_message(self, message):
+        self.lock.acquire()
+        self.message = message
+        self.lock.release()
 
 FONT_TINY_LCD  = ImageFont.truetype('fonts/truetype/freefont/FreeSansBold.ttf', 6)
 FONT_TINY_FBF  = ImageFont.truetype('fonts/truetype/freefont/FreeSansBold.ttf', 24)
@@ -58,6 +76,11 @@ FRAMEBUF_WIDTH = 480
 FRAMEBUF_HEIGHT = 320
 
 no_framebuf = False
+
+def capthread_f(cap, box):
+    while True:
+        ret, frame = cap.read()
+        box.set_message(frame)
 
 def clamp(minvalue, value, maxvalue):
     return max(minvalue, min(value, maxvalue))
@@ -194,15 +217,28 @@ def main():
 
     cap = cv2.VideoCapture(0)
 
+    box = MBox()
+    capthread = threading.Thread(target=capthread_f, args=(cap,box), daemon=True)
+    capthread.start()
+
     try:
         while True:
             t1 = time.time()
             t1read = time.time()
-            ret, frame = cap.read()
+            #while True:
+                # eat the stale, buffered frames
+                #t1a = time.time()
+                #ret, frame = cap.read()
+                #t1b = time.time()
+                #if not ret or (t1b - t1a) > 0.02:
+                    #break
+            frame = None
+            while frame is None:
+                frame = box.get_message()
+
+            #ret, frame = cap.read()
             image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGRA2RGBA))
             t2read = time.time()
-            if not ret:
-                break
         
             t1objd = time.time()
             boxs = objd.detect_image(image)
@@ -225,7 +261,7 @@ def main():
             # writes to disk are fairly substantial as well
 
             # print("box_num",len(boxs))
-            t1feat = t2objd
+            t1feat = time.time()
             #frame = np.array(image)
             features = encoder(frame,boxs)
             t2feat = time.time()
@@ -313,7 +349,7 @@ def main():
             t2 = time.time()
             frameTime = t2 - t1
 
-            print("Frame processing time={:.0f}ms (objd={:.0f}ms prep={:.0f}ms feat={:.0f}ms trac={:.0f}ms draw={:.0f}ms)".format(1000*(t2 - t1), 1000*(t2objd - t1objd), 1000*(t2prep - t1prep), 1000*(t2feat - t1feat), 1000*(t2trac - t1trac), 1000*(t2draw - t1draw)))
+            print("Frame processing time={:.0f}ms (read={:.0f}ms objd={:.0f}ms prep={:.0f}ms feat={:.0f}ms trac={:.0f}ms draw={:.0f}ms)".format(1000*(t2 - t1), 1000*(t2read - t1read), 1000*(t2objd - t1objd), 1000*(t2prep - t1prep), 1000*(t2feat - t1feat), 1000*(t2trac - t1trac), 1000*(t2draw - t1draw)))
 
             if cv2.waitKey(1) & 0xff == ord('q'):
                 break
