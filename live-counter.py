@@ -69,6 +69,8 @@ def main():
                         default=None)
     parser.add_argument('--model', help='File path of .tflite file.', required=True)
     parser.add_argument('--labels', help='File path of labels file.', required=True)
+    parser.add_argument('--no-preview', help='Disable picamera preview', required=False,
+                        action='store_true')
     args = parser.parse_args()
 
     objd = SSD_MOBILENET(wanted_label='person', model_file=args.model, label_file=args.labels)
@@ -84,7 +86,7 @@ def main():
     encoder = gdet.create_box_encoder(model_filename,batch_size=1)
     
     metric = nn_matching.NearestNeighborDistanceMetric("cosine", max_cosine_distance, nn_budget)
-    tracker = Tracker(metric,max_age=10)
+    tracker = Tracker(metric,max_iou_distance=0.3,max_age=10)
     delcount=0
     intcount=0
     poscount=0
@@ -115,11 +117,13 @@ def main():
     fps = 0.0
     frameTime = time.time()*1000
     with picamera.PiCamera(resolution=(CAMERA_WIDTH, CAMERA_HEIGHT), framerate=30) as camera:
-        camera.start_preview(alpha=255)
-        camera.annotate_foreground = Color('black')
-        camera.annotate_background = Color('white')
-        screenarray = np.array(screenbuf.resize((CAMERA_WIDTH, CAMERA_HEIGHT), Image.ANTIALIAS))
-        overlay = camera.add_overlay(screenarray.tobytes(), layer=3, alpha=64)
+        if not args.no_preview:
+            camera.start_preview(alpha=255)
+            camera.annotate_foreground = Color('black')
+            camera.annotate_background = Color('white')
+            screenarray = np.array(screenbuf.resize((CAMERA_WIDTH, CAMERA_HEIGHT),
+                                   Image.ANTIALIAS))
+            overlay = camera.add_overlay(screenarray.tobytes(), layer=3, alpha=64)
         try:
             stream = io.BytesIO()
             for _ in camera.capture_continuous(stream, format='jpeg', use_video_port=True):
@@ -136,8 +140,10 @@ def main():
                 stream.truncate()
 
                 # set background image and clear screen
+                t1bclr = time.time()
                 bgbuf.paste(image.resize((DISPLAY_WIDTH, DISPLAY_HEIGHT)))
-                draw.rectangle([0,0,DISPLAY_WIDTH,DISPLAY_HEIGHT], fill=0, outline=0)
+                draw.rectangle([0,0,DISPLAY_WIDTH,DISPLAY_HEIGHT], fill=(0,0,0,0), outline=0)
+                t2bclr = time.time()
 
                 # features and tracking get more expensive as there are more things to track
                 # writes to disk are fairly substantial as well
@@ -206,17 +212,20 @@ def main():
                 
                 t2trac = time.time()
 
+                t1draw = time.time()
                 draw.text((0, DISPLAY_HEIGHT-10), str(negcount), fill=(255,0,0), font=FONT_LARGE)
                 draw.text((DISPLAY_WIDTH/2, DISPLAY_HEIGHT-10), str(abs(negcount-poscount)), fill=(0,255,0), font=FONT_LARGE)
                 draw.text((DISPLAY_WIDTH-10, DISPLAY_HEIGHT-10), str(poscount), fill=(0,0,255), font=FONT_LARGE)
-                bgbuf.paste(screenbuf)
-                LCD.display(bgbuf)
-                screenarray = np.array(screenbuf.resize((CAMERA_WIDTH, CAMERA_HEIGHT), Image.ANTIALIAS))
-                overlay.update(screenarray.tobytes())
-            
+                tmp = (Image.alpha_composite(bgbuf,screenbuf)) # 1ms
+                LCD.display(tmp) # 50ms
+                if not args.no_preview:
+                    screenbuf2=(screenbuf.resize((CAMERA_WIDTH, CAMERA_HEIGHT), Image.ANTIALIAS)) # 50ms
+                    screenarray = np.array(screenbuf2)  # 8-10ms
+                    overlay.update(screenarray.tobytes()) # 10ms
+                t2draw = time.time()
                 t2 = time.time()
 
-                print("Frame processing time={:.0f}ms (objd={:.0f}ms prep={:.0f}ms feat={:.0f}ms trac={:.0f}ms)".format(1000*(t2 - t1), 1000*(t2objd - t1objd), 1000*(t2prep - t1prep), 1000*(t2feat - t1feat), 1000*(t2trac - t1trac)))
+                print("Frame processing time={:.0f}ms (objd={:.0f}ms prep={:.0f}ms feat={:.0f}ms trac={:.0f}ms draw={:.0f}ms)".format(1000*(t2 - t1), 1000*(t2objd - t1objd), 1000*(t2prep - t1prep), 1000*(t2feat - t1feat), 1000*(t2trac - t1trac), 1000*(t2draw - t1draw)))
             
 
             for track in tracker.tracks:
@@ -225,8 +234,9 @@ def main():
             print(delcount)
 
         finally:
-          camera.stop_preview()
-          LCD.LCD_Clear()
+            LCD.LCD_Clear()
+            if not args.no_preview: 
+                camera.stop_preview()
 
 if __name__ == '__main__':
     main()
