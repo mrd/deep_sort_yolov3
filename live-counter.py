@@ -14,8 +14,7 @@ import sys
 import argparse
 import numpy as np
 import signal
-import picamera
-from picamera import Color
+import cv2
 from PIL import ImageDraw
 from PIL import ImageFont
 from PIL import ImageColor
@@ -110,7 +109,7 @@ def main():
                         default=None)
     parser.add_argument('--model', help='File path of .tflite file.', required=True)
     parser.add_argument('--labels', help='File path of labels file.', required=True)
-    parser.add_argument('--no-preview', help='Disable picamera preview', required=False,
+    parser.add_argument('--no-preview', help='Disable console preview', required=False,
                         action='store_true')
     args = parser.parse_args()
     if args.no_preview:
@@ -155,136 +154,134 @@ def main():
 
     fps = 0.0
     frameTime = time.time()*1000
-    with picamera.PiCamera(resolution=(CAMERA_WIDTH, CAMERA_HEIGHT), framerate=30) as camera:
-        if not args.no_preview:
-            camera.start_preview(alpha=255)
-            camera.annotate_foreground = Color('black')
-            camera.annotate_background = Color('white')
-            previewarray = np.array(previewbuf.resize((CAMERA_WIDTH, CAMERA_HEIGHT),
-                                   Image.ANTIALIAS))
-            overlay = camera.add_overlay(previewarray.tobytes(), layer=3, alpha=64)
-        try:
-            stream = io.BytesIO()
-            for _ in camera.capture_continuous(stream, format='jpeg', use_video_port=True):
-                stream.seek(0)
-            
-                image = Image.open(stream)
-                t1 = time.time()
-                t1objd = time.time()
-                boxs = objd.detect_image(image)
-                # boxs is in tlwh format
-                t2objd = time.time()
 
-                stream.seek(0)
-                stream.truncate()
+    cap = cv2.VideoCapture(0)
 
-                # set background image and clear screen
-                t1bclr = time.time()
-                # clear both screens
-                drawrect([0,0,CAMERA_WIDTH,CAMERA_HEIGHT], fill=0, outline=0)
-                # also blit camera image onto LCD screen
-                if not no_lcd:
-                    screenbuf.paste(image.resize((DISPLAY_WIDTH, DISPLAY_HEIGHT)))
+    try:
+        while True:
+            t1 = time.time()
+            t1read = time.time()
+            ret, frame = cap.read()
+            image = Image.fromarray(frame)
+            t2read = time.time()
+            if not ret:
+                break
+        
+            t1objd = time.time()
+            boxs = objd.detect_image(image)
+            # boxs is in tlwh format
+            t2objd = time.time()
 
-                t2bclr = time.time()
+            # set background image and clear screen
+            t1bclr = time.time()
+            # clear both screens
+            drawrect([0,0,CAMERA_WIDTH,CAMERA_HEIGHT], fill=0, outline=0)
+            # also blit camera image onto LCD screen
+            if not no_lcd:
+                screenbuf.paste(image.resize((DISPLAY_WIDTH, DISPLAY_HEIGHT)))
+            if not args.no_preview:
+                previewbuf.paste(image.resize((CAMERA_WIDTH, CAMERA_HEIGHT)))
 
-                # features and tracking get more expensive as there are more things to track
-                # writes to disk are fairly substantial as well
+            t2bclr = time.time()
 
-                # print("box_num",len(boxs))
-                t1feat = t2objd
-                frame = np.array(image)
-                features = encoder(frame,boxs)
-                t2feat = time.time()
-            
-                # score to 1.0 here).
-                detections = [Detection(bbox, 1.0, feature) for bbox, feature in zip(boxs, features)]
-            
-                # Run non-maxima suppression.
-                t1prep = time.time()
-                boxes = np.array([d.tlwh for d in detections])
-                scores = np.array([d.confidence for d in detections])
-                indices = preprocessing.non_max_suppression(boxes, nms_max_overlap, scores)
-                detections = [detections[i] for i in indices]
-                t2prep = time.time()
-            
-                # Call the tracker
-                t1trac = time.time()
-                tracker.predict()
-                tracker.update(detections)
-                a = (cameracountline[0,0], cameracountline[0,1])
-                b = (cameracountline[1,0], cameracountline[1,1])
-                drawline([a, b], fill=(0,0,255), width=3)
+            # features and tracking get more expensive as there are more things to track
+            # writes to disk are fairly substantial as well
 
-                for track in tracker.deleted_tracks:
-                    i = track.track_id
-                    if track.is_deleted():
-                        check_track(track.track_id)
+            # print("box_num",len(boxs))
+            t1feat = t2objd
+            #frame = np.array(image)
+            features = encoder(frame,boxs)
+            t2feat = time.time()
+        
+            # score to 1.0 here).
+            detections = [Detection(bbox, 1.0, feature) for bbox, feature in zip(boxs, features)]
+        
+            # Run non-maxima suppression.
+            t1prep = time.time()
+            boxes = np.array([d.tlwh for d in detections])
+            scores = np.array([d.confidence for d in detections])
+            indices = preprocessing.non_max_suppression(boxes, nms_max_overlap, scores)
+            detections = [detections[i] for i in indices]
+            t2prep = time.time()
+        
+            # Call the tracker
+            t1trac = time.time()
+            tracker.predict()
+            tracker.update(detections)
+            a = (cameracountline[0,0], cameracountline[0,1])
+            b = (cameracountline[1,0], cameracountline[1,1])
+            drawline([a, b], fill=(0,0,255), width=3)
 
-                for track in tracker.tracks:
-                    i = track.track_id
-                    if not track.is_confirmed() or track.time_since_update > 1:
-                        continue
-                    if i not in db:
-                        db[i] = []
-                    db[i].append(track.mean[:2].copy())
-                    if len(db[i]) > 1:
-                        pts = (np.array(db[i]).reshape((-1,1,2))).reshape(-1)
-                        drawline(pts, fill=(255,0,255), width=3)
-                        p1 = cameracountline[0]
-                        q1 = cameracountline[1]
-                        p2 = np.array(db[i][-1])
-                        q2 = np.array(db[i][-2])
-                        cp = np.cross(q1 - p1,q2 - p2)
-                        if intersection(p1,q1,p2,q2):
-                            intcount+=1
-                            print("track_id={} just intersected camera countline; cross-prod={}; intcount={}".format(i,cp,intcount))
-                            drawline(pts[-4:], fill=(0,0,255), width=5)
-                            if cp >= 0:
-                                poscount+=1
-                            else:
-                                negcount+=1
-
-                    bbox = track.to_tlbr()
-                    drawrect(bbox,outline=(255,255,255))
-                    drawtext(bbox[:2],str(track.track_id), fill=(0,255,0), font=FONT_SMALL)
-
-                for det in detections:
-                    bbox = det.to_tlbr()
-                    drawrect(bbox,outline=(255,0,0))
-                
-                t2trac = time.time()
-
-                t1draw = time.time()
-
-                # draw counters along bottom of screen(s)
-                (_, dy) = textsize(str(negcount), font = FONT_LARGE)
-                drawtext((0, CAMERA_HEIGHT-dy), str(negcount), fill=(255,0,0), font=FONT_LARGE)
-                (dx, dy) = textsize(str(abs(negcount-poscount)), font = FONT_LARGE)
-                drawtext(((CAMERA_WIDTH-dx)/2, CAMERA_HEIGHT-dy), str(abs(negcount-poscount)), fill=(0,255,0), font=FONT_LARGE)
-                (dx, dy) = textsize(str(poscount), font = FONT_LARGE)
-                drawtext((CAMERA_WIDTH-dx, CAMERA_HEIGHT-dy), str(poscount), fill=(0,0,255), font=FONT_LARGE)
-                if not no_lcd:
-                    LCD.display(screenbuf) #50ms (RPi3)
-                if not args.no_preview:
-                    previewarray = np.array(previewbuf) #13ms (RPi3)
-                    overlay.update(previewarray.tobytes()) #12ms (RPi3)
-                t2draw = time.time()
-                t2 = time.time()
-
-                print("Frame processing time={:.0f}ms (objd={:.0f}ms prep={:.0f}ms feat={:.0f}ms trac={:.0f}ms draw={:.0f}ms)".format(1000*(t2 - t1), 1000*(t2objd - t1objd), 1000*(t2prep - t1prep), 1000*(t2feat - t1feat), 1000*(t2trac - t1trac), 1000*(t2draw - t1draw)))
-            
+            for track in tracker.deleted_tracks:
+                i = track.track_id
+                if track.is_deleted():
+                    check_track(track.track_id)
 
             for track in tracker.tracks:
-                check_track(track.track_id)
+                i = track.track_id
+                if not track.is_confirmed() or track.time_since_update > 1:
+                    continue
+                if i not in db:
+                    db[i] = []
+                db[i].append(track.mean[:2].copy())
+                if len(db[i]) > 1:
+                    pts = (np.array(db[i]).reshape((-1,1,2))).reshape(-1)
+                    drawline(pts, fill=(255,0,255), width=3)
+                    p1 = cameracountline[0]
+                    q1 = cameracountline[1]
+                    p2 = np.array(db[i][-1])
+                    q2 = np.array(db[i][-2])
+                    cp = np.cross(q1 - p1,q2 - p2)
+                    if intersection(p1,q1,p2,q2):
+                        intcount+=1
+                        print("track_id={} just intersected camera countline; cross-prod={}; intcount={}".format(i,cp,intcount))
+                        drawline(pts[-4:], fill=(0,0,255), width=5)
+                        if cp >= 0:
+                            poscount+=1
+                        else:
+                            negcount+=1
 
-            print(delcount)
+                bbox = track.to_tlbr()
+                drawrect(bbox,outline=(255,255,255))
+                drawtext(bbox[:2],str(track.track_id), fill=(0,255,0), font=FONT_SMALL)
 
-        finally:
+            for det in detections:
+                bbox = det.to_tlbr()
+                drawrect(bbox,outline=(255,0,0))
+            
+            t2trac = time.time()
+
+            t1draw = time.time()
+
+            # draw counters along bottom of screen(s)
+            (_, dy) = textsize(str(negcount), font = FONT_LARGE)
+            drawtext((0, CAMERA_HEIGHT-dy), str(negcount), fill=(255,0,0), font=FONT_LARGE)
+            (dx, dy) = textsize(str(abs(negcount-poscount)), font = FONT_LARGE)
+            drawtext(((CAMERA_WIDTH-dx)/2, CAMERA_HEIGHT-dy), str(abs(negcount-poscount)), fill=(0,255,0), font=FONT_LARGE)
+            (dx, dy) = textsize(str(poscount), font = FONT_LARGE)
+            drawtext((CAMERA_WIDTH-dx, CAMERA_HEIGHT-dy), str(poscount), fill=(0,0,255), font=FONT_LARGE)
             if not no_lcd:
-                LCD.LCD_Clear()
-            if not args.no_preview: 
-                camera.stop_preview()
+                LCD.display(screenbuf) #50ms (RPi3)
+            if not args.no_preview:
+                previewarray=cv2.resize(np.array(previewbuf),(480,320))
+                fbframe16 = cv2.cvtColor(previewarray, cv2.COLOR_RGBA2BGR565)
+                print(fbframe16.shape)
+                with open('/dev/fb1', 'wb') as buf:
+                   buf.write(fbframe16)
+            t2draw = time.time()
+            t2 = time.time()
+
+            print("Frame processing time={:.0f}ms (objd={:.0f}ms prep={:.0f}ms feat={:.0f}ms trac={:.0f}ms draw={:.0f}ms)".format(1000*(t2 - t1), 1000*(t2objd - t1objd), 1000*(t2prep - t1prep), 1000*(t2feat - t1feat), 1000*(t2trac - t1trac), 1000*(t2draw - t1draw)))
+        
+
+        for track in tracker.tracks:
+            check_track(track.track_id)
+
+        print(delcount)
+
+    finally:
+        if not no_lcd:
+            LCD.LCD_Clear()
 
 if __name__ == '__main__':
     main()
