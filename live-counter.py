@@ -195,7 +195,7 @@ def main():
             t1 = time.time()
             t1read = time.time()
             ret, frame = cap.read()
-            image = Image.fromarray(frame)
+            image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGRA2RGBA))
             t2read = time.time()
             if not ret:
                 break
