@@ -175,6 +175,7 @@ def main():
         drawFBF = None
 
     objd = SSD_MOBILENET(wanted_label='person', model_file=args.model, label_file=args.labels)
+    #objd = YOLO_TFLITE()
 
    # Definition of the parameters
     max_cosine_distance = args.max_cosine_distance
@@ -237,7 +238,7 @@ def main():
                 frame = box.get_message()
 
             #ret, frame = cap.read()
-            image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGRA2RGBA))
+            image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGRA2RGB))
             t2read = time.time()
         
             t1objd = time.time()
