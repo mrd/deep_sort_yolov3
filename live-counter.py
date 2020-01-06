@@ -35,8 +35,13 @@ class SigTerm(SystemExit): pass
 def sigterm(sig,frm): raise SigTerm
 signal.signal(15,sigterm)
 
-FONT_SMALL = ImageFont.truetype('fonts/truetype/freefont/FreeSansBold.ttf', 10)
-FONT_LARGE = ImageFont.truetype('fonts/truetype/freefont/FreeSansBold.ttf', 12)
+FONT_SMALL_LCD = ImageFont.truetype('fonts/truetype/freefont/FreeSansBold.ttf', 10)
+FONT_SMALL_PRV = ImageFont.truetype('fonts/truetype/freefont/FreeSansBold.ttf', 40)
+FONT_LARGE_LCD = ImageFont.truetype('fonts/truetype/freefont/FreeSansBold.ttf', 12)
+FONT_LARGE_PRV = ImageFont.truetype('fonts/truetype/freefont/FreeSansBold.ttf', 48)
+
+FONT_SMALL = {'lcd': FONT_SMALL_LCD, 'prv': FONT_SMALL_PRV}
+FONT_LARGE = {'lcd': FONT_LARGE_LCD, 'prv': FONT_LARGE_PRV}
 
 DISPLAY_WIDTH = 160                # LCD panel width in pixels
 DISPLAY_HEIGHT = 128               # LCD panel height
@@ -57,11 +62,38 @@ def main():
     LCD.begin()
     ## screenbuf = Image.new("RGB", (LCD.LCD_Dis_Column, LCD.LCD_Dis_Page), "WHITE")
     screenbuf = Image.new("RGBA", (DISPLAY_WIDTH, DISPLAY_HEIGHT), (0,0,0,0))
-    bgbuf = Image.new("RGBA", (DISPLAY_WIDTH, DISPLAY_HEIGHT), (0,0,0,0))
-    draw = ImageDraw.Draw(screenbuf)
-    draw.text((33, 22), 'Initialising...', fill = "BLUE", font = FONT_LARGE)
-    ## LCD.LCD_PageImage(screenbuf)
-    LCD.display(screenbuf)
+    previewbuf = Image.new("RGBA", (CAMERA_WIDTH, CAMERA_HEIGHT), (0,0,0,0))
+    drawLCD = ImageDraw.Draw(screenbuf)
+    drawPRV = ImageDraw.Draw(previewbuf)
+    ratios = np.array([DISPLAY_WIDTH/CAMERA_WIDTH, DISPLAY_HEIGHT/CAMERA_HEIGHT],dtype=float)
+
+    # draw* functions work in CAMERA coordinates
+    def drawtext(xy, txt, fill = None, font = FONT_SMALL):
+        nonlocal drawLCD, drawPRV
+        xyl = list(np.int32(np.array(xy) * ratios))
+        drawLCD.text(xyl, txt, fill=fill, font=font['lcd'])
+        if drawPRV is not None: 
+            drawPRV.text(list(np.array(xy,dtype=int).reshape(-1)), txt, fill=fill, font=font['prv'])
+
+    def drawline(pts, fill = None, width = 0):
+        nonlocal drawLCD, drawPRV
+        ptsl = list(np.int32(np.array(pts).reshape(-1,2) * ratios).reshape(-1))
+        drawLCD.line(ptsl, fill = fill, width = width)
+        if drawPRV is not None: 
+            drawPRV.line(list(np.array(pts,dtype=int).reshape(-1)), fill = fill, width = width)
+
+    def drawrect(pts, outline = None, fill = None):
+        nonlocal drawLCD, drawPRV
+        ptsl = list(np.int32(np.array(pts).reshape(-1,2) * ratios).reshape(-1))
+        drawLCD.rectangle(ptsl, fill = fill, outline = outline)
+        if drawPRV is not None: 
+            drawPRV.rectangle(list(np.array(pts,dtype=int).reshape(-1)), fill = fill, outline = outline)
+
+    def textsize(txt, font = FONT_SMALL):
+        return font['prv'].getsize(txt)
+
+    drawtext((100, 100), 'Initialising...', fill = "BLUE", font = FONT_LARGE)
+    LCD.display(screenbuf) # force initial drawing on LCD
 
     ##################################################
     parser = argparse.ArgumentParser()
@@ -72,6 +104,8 @@ def main():
     parser.add_argument('--no-preview', help='Disable picamera preview', required=False,
                         action='store_true')
     args = parser.parse_args()
+    if args.no_preview:
+        drawPRV = None
 
     objd = SSD_MOBILENET(wanted_label='person', model_file=args.model, label_file=args.labels)
     basedir = os.getenv('DEEPSORTHOME','.')
@@ -92,16 +126,12 @@ def main():
     poscount=0
     negcount=0
     db = {}
-    ratios = np.array([DISPLAY_WIDTH/CAMERA_WIDTH, DISPLAY_HEIGHT/CAMERA_HEIGHT],dtype=float)
-    def check_track(i, draw=None):
+    def check_track(i):
         nonlocal delcount
         nonlocal ratios
         nonlocal cameracountline
         if i in db and len(db[i]) > 1:
             if any_intersection(cameracountline[0], cameracountline[1], np.array(db[i])):
-                if draw is not None:
-                    pts = np.array(db[i]).reshape((-1,1,2)) * ratios
-                    #draw.line(list(np.int32(pts).reshape(-1)), fill=(0,0,255), width=6)
                 delcount+=1
                 print("delcount={}".format(delcount))
             db[i] = []
@@ -121,9 +151,9 @@ def main():
             camera.start_preview(alpha=255)
             camera.annotate_foreground = Color('black')
             camera.annotate_background = Color('white')
-            screenarray = np.array(screenbuf.resize((CAMERA_WIDTH, CAMERA_HEIGHT),
+            previewarray = np.array(previewbuf.resize((CAMERA_WIDTH, CAMERA_HEIGHT),
                                    Image.ANTIALIAS))
-            overlay = camera.add_overlay(screenarray.tobytes(), layer=3, alpha=64)
+            overlay = camera.add_overlay(previewarray.tobytes(), layer=3, alpha=64)
         try:
             stream = io.BytesIO()
             for _ in camera.capture_continuous(stream, format='jpeg', use_video_port=True):
@@ -141,8 +171,11 @@ def main():
 
                 # set background image and clear screen
                 t1bclr = time.time()
-                bgbuf.paste(image.resize((DISPLAY_WIDTH, DISPLAY_HEIGHT)))
-                draw.rectangle([0,0,DISPLAY_WIDTH,DISPLAY_HEIGHT], fill=(0,0,0,0), outline=0)
+                # clear both screens
+                drawrect([0,0,CAMERA_WIDTH,CAMERA_HEIGHT], fill=0, outline=0)
+                # also blit camera image onto LCD screen
+                screenbuf.paste(image.resize((DISPLAY_WIDTH, DISPLAY_HEIGHT)))
+
                 t2bclr = time.time()
 
                 # features and tracking get more expensive as there are more things to track
@@ -169,14 +202,14 @@ def main():
                 t1trac = time.time()
                 tracker.predict()
                 tracker.update(detections)
-                a = (countline[0,0], countline[0,1])
-                b = (countline[1,0], countline[1,1])
-                draw.line([a, b], fill=(0,0,255), width=3)
+                a = (cameracountline[0,0], cameracountline[0,1])
+                b = (cameracountline[1,0], cameracountline[1,1])
+                drawline([a, b], fill=(0,0,255), width=3)
 
                 for track in tracker.deleted_tracks:
                     i = track.track_id
                     if track.is_deleted():
-                        check_track(track.track_id, draw)
+                        check_track(track.track_id)
 
                 for track in tracker.tracks:
                     i = track.track_id
@@ -186,8 +219,8 @@ def main():
                         db[i] = []
                     db[i].append(track.mean[:2].copy())
                     if len(db[i]) > 1:
-                        pts = (np.array(db[i]).reshape((-1,1,2)) * ratios).reshape(-1)
-                        draw.line(list(np.int32(pts)), fill=(255,0,255), width=3)
+                        pts = (np.array(db[i]).reshape((-1,1,2))).reshape(-1)
+                        drawline(pts, fill=(255,0,255), width=3)
                         p1 = cameracountline[0]
                         q1 = cameracountline[1]
                         p2 = np.array(db[i][-1])
@@ -196,32 +229,35 @@ def main():
                         if intersection(p1,q1,p2,q2):
                             intcount+=1
                             print("track_id={} just intersected camera countline; cross-prod={}; intcount={}".format(i,cp,intcount))
-                            draw.line(list(np.int32(pts)[-4:]), fill=(0,0,255), width=5)
+                            drawline(pts[-4:], fill=(0,0,255), width=5)
                             if cp >= 0:
                                 poscount+=1
                             else:
                                 negcount+=1
 
-                    bbox = list((track.to_tlbr().reshape(2,2) * ratios).astype(int).reshape(-1))
-                    draw.rectangle(bbox,outline=(255,255,255))
-                    draw.text(bbox[:2],str(track.track_id), fill=(0,255,0), font=FONT_SMALL)
+                    bbox = track.to_tlbr()
+                    drawrect(bbox,outline=(255,255,255))
+                    drawtext(bbox[:2],str(track.track_id), fill=(0,255,0), font=FONT_SMALL)
 
                 for det in detections:
-                    bbox = list((det.to_tlbr().reshape(2,2) * ratios).astype(int).reshape(-1))
-                    draw.rectangle(bbox,outline=(255,0,0))
+                    bbox = det.to_tlbr()
+                    drawrect(bbox,outline=(255,0,0))
                 
                 t2trac = time.time()
 
                 t1draw = time.time()
-                draw.text((0, DISPLAY_HEIGHT-10), str(negcount), fill=(255,0,0), font=FONT_LARGE)
-                draw.text((DISPLAY_WIDTH/2, DISPLAY_HEIGHT-10), str(abs(negcount-poscount)), fill=(0,255,0), font=FONT_LARGE)
-                draw.text((DISPLAY_WIDTH-10, DISPLAY_HEIGHT-10), str(poscount), fill=(0,0,255), font=FONT_LARGE)
-                tmp = (Image.alpha_composite(bgbuf,screenbuf)) # 1ms
-                LCD.display(tmp) # 50ms
+
+                # draw counters along bottom of screen(s)
+                (_, dy) = textsize(str(negcount), font = FONT_LARGE)
+                drawtext((0, CAMERA_HEIGHT-dy), str(negcount), fill=(255,0,0), font=FONT_LARGE)
+                (dx, dy) = textsize(str(abs(negcount-poscount)), font = FONT_LARGE)
+                drawtext(((CAMERA_WIDTH-dx)/2, CAMERA_HEIGHT-dy), str(abs(negcount-poscount)), fill=(0,255,0), font=FONT_LARGE)
+                (dx, dy) = textsize(str(poscount), font = FONT_LARGE)
+                drawtext((CAMERA_WIDTH-dx, CAMERA_HEIGHT-dy), str(poscount), fill=(0,0,255), font=FONT_LARGE)
+                LCD.display(screenbuf) #50ms (RPi3)
                 if not args.no_preview:
-                    screenbuf2=(screenbuf.resize((CAMERA_WIDTH, CAMERA_HEIGHT), Image.ANTIALIAS)) # 50ms
-                    screenarray = np.array(screenbuf2)  # 8-10ms
-                    overlay.update(screenarray.tobytes()) # 10ms
+                    previewarray = np.array(previewbuf) #13ms (RPi3)
+                    overlay.update(previewarray.tobytes()) #12ms (RPi3)
                 t2draw = time.time()
                 t2 = time.time()
 
