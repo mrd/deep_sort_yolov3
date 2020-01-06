@@ -36,13 +36,17 @@ class SigTerm(SystemExit): pass
 def sigterm(sig,frm): raise SigTerm
 signal.signal(15,sigterm)
 
-FONT_SMALL_LCD = ImageFont.truetype('fonts/truetype/freefont/FreeSansBold.ttf', 10)
-FONT_SMALL_PRV = ImageFont.truetype('fonts/truetype/freefont/FreeSansBold.ttf', 40)
+FONT_TINY_LCD  = ImageFont.truetype('fonts/truetype/freefont/FreeSansBold.ttf', 6)
+FONT_TINY_FBF  = ImageFont.truetype('fonts/truetype/freefont/FreeSansBold.ttf', 24)
 FONT_LARGE_LCD = ImageFont.truetype('fonts/truetype/freefont/FreeSansBold.ttf', 12)
-FONT_LARGE_PRV = ImageFont.truetype('fonts/truetype/freefont/FreeSansBold.ttf', 48)
+FONT_SMALL_LCD = ImageFont.truetype('fonts/truetype/freefont/FreeSansBold.ttf', 10)
+FONT_SMALL_FBF = ImageFont.truetype('fonts/truetype/freefont/FreeSansBold.ttf', 40)
+FONT_LARGE_LCD = ImageFont.truetype('fonts/truetype/freefont/FreeSansBold.ttf', 12)
+FONT_LARGE_FBF = ImageFont.truetype('fonts/truetype/freefont/FreeSansBold.ttf', 48)
 
-FONT_SMALL = {'lcd': FONT_SMALL_LCD, 'fbf': FONT_SMALL_PRV}
-FONT_LARGE = {'lcd': FONT_LARGE_LCD, 'fbf': FONT_LARGE_PRV}
+FONT_TINY  = {'lcd': FONT_TINY_LCD, 'fbf': FONT_TINY_FBF}
+FONT_SMALL = {'lcd': FONT_SMALL_LCD, 'fbf': FONT_SMALL_FBF}
+FONT_LARGE = {'lcd': FONT_LARGE_LCD, 'fbf': FONT_LARGE_FBF}
 
 DISPLAY_WIDTH = 160                # LCD panel width in pixels
 DISPLAY_HEIGHT = 128               # LCD panel height
@@ -186,7 +190,7 @@ def main():
     cameracountline = countline.astype(float) / ratios
 
     fps = 0.0
-    frameTime = time.time()*1000
+    frameTime = 0
 
     cap = cv2.VideoCapture(0)
 
@@ -293,6 +297,11 @@ def main():
             drawtext(((CAMERA_WIDTH-dx)/2, CAMERA_HEIGHT-dy), str(abs(negcount-poscount)), fill=(0,255,0), font=FONT_LARGE)
             (dx, dy) = textsize(str(poscount), font = FONT_LARGE)
             drawtext((CAMERA_WIDTH-dx, CAMERA_HEIGHT-dy), str(poscount), fill=(0,0,255), font=FONT_LARGE)
+
+            if frameTime != 0:
+                frameTimeMsg = "{:.0f}ms".format(frameTime*1000)
+                (dx, dy) = textsize(frameTimeMsg, font = FONT_TINY)
+                drawtext((CAMERA_WIDTH-dx, 0), frameTimeMsg, fill=(0,0,255), font=FONT_TINY)
             if not no_lcd:
                 LCD.display(screenbuf) #50ms (RPi3)
             if not no_framebuf:
@@ -302,6 +311,7 @@ def main():
                    buf.write(fbframe16)
             t2draw = time.time()
             t2 = time.time()
+            frameTime = t2 - t1
 
             print("Frame processing time={:.0f}ms (objd={:.0f}ms prep={:.0f}ms feat={:.0f}ms trac={:.0f}ms draw={:.0f}ms)".format(1000*(t2 - t1), 1000*(t2objd - t1objd), 1000*(t2prep - t1prep), 1000*(t2feat - t1feat), 1000*(t2trac - t1trac), 1000*(t2draw - t1draw)))
 
