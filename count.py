@@ -130,6 +130,10 @@ def main(yolo):
             if track.is_deleted():
                 check_track(track.track_id, frame)
 
+        for det in detections:
+            bbox = det.to_tlbr()
+            cv2.rectangle(frame,(int(bbox[0]), int(bbox[1])), (int(bbox[2]), int(bbox[3])),(255,0,0), 2)
+
         for track in tracker.tracks:
             i = track.track_id
             if not track.is_confirmed() or track.time_since_update > 1:
@@ -142,13 +146,20 @@ def main(yolo):
                 cv2.polylines(frame, [np.int32(pts)], False, [255,0,255], 3)
             bbox = track.to_tlbr()
             cv2.rectangle(frame, (int(bbox[0]), int(bbox[1])), (int(bbox[2]), int(bbox[3])),(255,255,255), 2)
-            cv2.putText(frame, str(track.track_id),(int(bbox[0]), int(bbox[1])),0, 5e-3 * 200, (0,255,0),2)
-
-        for det in detections:
-            bbox = det.to_tlbr()
-            cv2.rectangle(frame,(int(bbox[0]), int(bbox[1])), (int(bbox[2]), int(bbox[3])),(255,0,0), 2)
+            msg = str(i)
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            (_,h),_ = cv2.getTextSize(msg, font, 5e-3 * 200, 2)
+            txtx = int(bbox[0])
+            txty = int(bbox[1])+h
+            cv2.putText(frame, msg, (txtx, txty), font, 5e-3 * 200, (0,255,0),2)
             
-        cv2.putText(frame, str(delcount),(0, image_height-5),0, 5e-3 * 200, (0,0,255),2)
+        msg = str(delcount)
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        _,baseline = cv2.getTextSize(msg, font, 5e-3 * 200, 2)
+        txtx = 0
+        txty = image_height - baseline
+        cv2.putText(frame, str(delcount), (txtx, txty), font, 5e-3 * 200, (0,0,255), 2)
+
         if args.show:
             cv2.imshow('', frame)
         
@@ -174,6 +185,18 @@ def main(yolo):
 
     for track in tracker.tracks:
         check_track(track.track_id)
+
+    frame = np.array(image)
+    msg = "final count = {}".format(delcount)
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    (w,h),_ = cv2.getTextSize(msg, font, 5e-3 * 200, 2)
+    txtx = int(image_width/2 - w/2)
+    txty = int(image_height/2 - h/2)
+    cv2.rectangle(frame, (txtx-2, txty-2), (txtx+w+2, txty+h+2), (255,255,255), -1)
+    cv2.putText(frame, msg, (txtx, txty+h), font, 5e-3 * 200, (0,0,0),2)
+
+    for i in range(150): # 5 seconds
+        out.write(frame)
 
     print(delcount)
     video_capture.release()
