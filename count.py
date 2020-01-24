@@ -23,7 +23,27 @@ from deep_sort.detection import Detection as ddet
 warnings.filterwarnings('ignore')
 
 
-def main(yolo):
+dragging = False
+startPt = None
+endPt = None
+
+def mouse_handler(event, x, y, flags, param):
+    global dragging, startPt, endPt
+    if event == cv2.EVENT_LBUTTONDOWN:
+        dragging = True
+        startPt = (x,y)
+    elif event == cv2.EVENT_LBUTTONUP:
+        if dragging and startPt is not None:
+            print("--line={},{},{},{}".format(startPt[0], startPt[1], endPt[0], endPt[1]))
+        dragging = False
+        startPt = None
+        endPt = None
+    elif event == cv2.EVENT_MOUSEMOVE:
+        if dragging and startPt is not None:
+            endPt = (x,y)
+
+def main():
+    global dragging, startPt, endPt
     parser = argparse.ArgumentParser()
     parser.add_argument('input', help="input file")
     parser.add_argument('output', help="output file")
@@ -31,7 +51,13 @@ def main(yolo):
                         action='store_true')
     parser.add_argument('--line', '-L', help="counting line: x1,y1,x2,y2",
                         default=None)
+    parser.add_argument('--label', help="label of object class to count",
+                        default=None)
     args = parser.parse_args()
+    yolo = YOLO(wanted_label=args.label)
+    if args.show:
+        cv2.namedWindow('count')
+        cv2.setMouseCallback('count', mouse_handler)
 
     basedir = os.getenv('DEEPSORTHOME','.')
 
@@ -62,8 +88,8 @@ def main(yolo):
                 print("delcount={}".format(delcount))
             db[i] = []
 
-    writeVideo_flag = True 
-    
+    writeVideo_flag = True
+
     video_capture = cv2.VideoCapture(input_filename)
     #video_capture = cv2.VideoCapture('jaarbeursplein.mp4')
     image_width = 0
@@ -77,7 +103,7 @@ def main(yolo):
         fourcc = cv2.VideoWriter_fourcc(*'H264')
         out = cv2.VideoWriter(output_filename, fourcc, 15, (w, h))
         #list_file = open('detection.txt', 'w')
-        frame_index = -1 
+        frame_index = -1
 
     if args.line is None:
         countline = np.array([[0,h/2],[w,h/2]],dtype=int)
@@ -117,7 +143,7 @@ def main(yolo):
         indices = preprocessing.non_max_suppression(boxes, nms_max_overlap, scores)
         detections = [detections[i] for i in indices]
         t2prep = time.time()
-        
+
         # Call the tracker
         t1trac = time.time()
         tracker.predict()
@@ -152,7 +178,7 @@ def main(yolo):
             txtx = int(bbox[0])
             txty = int(bbox[1])+h
             cv2.putText(frame, msg, (txtx, txty), font, 5e-3 * 200, (0,255,0),2)
-            
+
         msg = str(delcount)
         font = cv2.FONT_HERSHEY_SIMPLEX
         _,baseline = cv2.getTextSize(msg, font, 5e-3 * 200, 2)
@@ -160,9 +186,6 @@ def main(yolo):
         txty = image_height - baseline
         cv2.putText(frame, str(delcount), (txtx, txty), font, 5e-3 * 200, (0,0,255), 2)
 
-        if args.show:
-            cv2.imshow('', frame)
-        
         t2trac = time.time()
         if writeVideo_flag:
             # save a frame
@@ -173,12 +196,17 @@ def main(yolo):
             #   for i in range(0,len(boxs)):
             #       list_file.write(str(boxs[i][0]) + ' '+str(boxs[i][1]) + ' '+str(boxs[i][2]) + ' '+str(boxs[i][3]) + ' ')
             #list_file.write('\n')
-            
+
+        if args.show:
+            if dragging and startPt is not None and endPt is not None:
+                cv2.line(frame, startPt, endPt, (255, 255, 255), 3)
+            cv2.imshow('count', frame)
+
         #fps  = ( fps + (1./(time.time()-t1)) ) / 2
         #print("fps= %f"%(fps))
         t2 = time.time()
         print("Frame processing time={:.0f}ms (yolo={:.0f}ms prep={:.0f}ms feat={:.0f}ms trac={:.0f}ms)".format(1000*(t2 - t1), 1000*(t2yolo - t1yolo), 1000*(t2prep - t1prep), 1000*(t2feat - t1feat), 1000*(t2trac - t1trac)))
-        
+
         # Press Q to stop!
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
@@ -207,4 +235,4 @@ def main(yolo):
         cv2.destroyAllWindows()
 
 if __name__ == '__main__':
-    main(YOLO())
+    main()
