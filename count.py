@@ -166,11 +166,13 @@ def main():
                 continue
             if i not in db:
                 db[i] = []
-            db[i].append(track.mean[:2].copy())
+            bbox = track.to_tlbr()
+            bottomCenter = np.array([(bbox[0] + bbox[2]) / 2.0, bbox[3]])
+
+            db[i].append(bottomCenter)
             if len(db[i]) > 1:
                 pts = np.array(db[i]).reshape((-1,1,2))
                 cv2.polylines(frame, [np.int32(pts)], False, [255,0,255], 3)
-            bbox = track.to_tlbr()
             cv2.rectangle(frame, (int(bbox[0]), int(bbox[1])), (int(bbox[2]), int(bbox[3])),(255,255,255), 2)
             msg = str(i)
             font = cv2.FONT_HERSHEY_SIMPLEX
