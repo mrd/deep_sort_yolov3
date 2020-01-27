@@ -196,7 +196,7 @@ def main():
     if no_framebuf:
         drawFBF = None
 
-    objd = SSD_MOBILENET(wanted_label='person', model_file=args.model, label_file=args.labels)
+    objd = SSD_MOBILENET(wanted_label='person', model_file=args.model, label_file=args.labels, num_threads=int(args.num_threads))
     #objd = YOLO_TFLITE()
 
    # Definition of the parameters
