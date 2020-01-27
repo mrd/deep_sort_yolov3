@@ -34,6 +34,10 @@ import threading
 from multiprocessing import Pool
 import socket
 import selectors
+from imutils.video import VideoStream
+from flask import Response
+from flask import Flask
+from flask import render_template
 
 warnings.filterwarnings('ignore')
 
@@ -99,6 +103,12 @@ no_framebuf = False
 
 running = True
 sleeping = False
+streaming = True
+streamFilename = None
+webFrame = None
+webLock = None
+webCondition = None
+webApp = Flask(__name__)
 delcount=0
 intcount=0
 poscount=0
@@ -154,9 +164,19 @@ def readcmd(conn, mask):
     conn.sendto(response.encode('utf-8'), client)
 
 
+class FlaskThread(threading.Thread):
+    def __init__(self, port):
+        self.port = port
+        super().__init__()
+
+    def run(self):
+        global webApp
+        webApp.run(host='0.0.0.0', port=self.port, debug=False, use_debugger=False,
+                   use_reloader=False, threaded=True)
+
 def main():
-    global running, sleeping, perfmsgs
-    global delcount, intcount, poscount, negcount
+    global running, sleeping, perfmsgs, streaming, webFrame, webLock, webCondition
+    global delcount, intcount, poscount, negcount, streamFilename
     global no_framebuf, no_lcd
     basedir = os.getenv('DEEPSORTHOME','.')
 
@@ -188,10 +208,17 @@ def main():
                         metavar='PATH', default=basedir)
     parser.add_argument('--camera-flip', help='Flip the camera image vertically',
                         default=True, type=bool)
+    parser.add_argument('--streaming', help='Stream video over the web?',
+                        default=True, type=bool)
+    parser.add_argument('--streaming-port', help='TCP port for web video stream',
+                        default=8080, type=int)
+    parser.add_argument('--stream-path', help='File to write JPG data into, repeatedly.',
+                        default=None)
     parser.add_argument('--control-socket', help='Path to UNIX socket for control console.',
                         default='/tmp/live-counter.sock')
     args = parser.parse_args()
     basedir = args.deepsorthome
+    streamFilename = args.stream_path
 
     socket_path = args.control_socket
     if os.path.exists(socket_path):
@@ -214,6 +241,11 @@ def main():
     else:
         COLOR_MODE = None
         print("Unsupported --color-mode={}".format(args.color_mode))
+
+    streaming = args.streaming
+    webFrame = None
+    webLock = threading.Lock()
+    webCondition = threading.Condition(lock=webLock)
 
     ##################################################
     # Initialise LCD
@@ -269,7 +301,8 @@ def main():
         return font['fbf'].getsize(txt) / ratiosFBF
 
     def copybackbuf():
-        global no_lcd, no_framebuf, COLOR_MODE
+        global no_lcd, no_framebuf, COLOR_MODE, webFrame, webLock, webCondition, streaming
+        global streamFilename
         nonlocal screenbuf, framebuf, args
         if not no_lcd:
             LCD.display(screenbuf) #50ms (RPi3)
@@ -281,7 +314,12 @@ def main():
                 fbframe16 = framearray
             with open(args.framebuffer, 'wb') as buf:
                buf.write(fbframe16)
-
+            if streamFilename is not None:
+                cv2.imwrite(streamFilename, fbframe16)
+        if streaming:
+            with webLock:
+                webFrame = cv2.resize(np.array(framebuf),(320,240))
+                webCondition.notify()
 
     drawtext((100, 100), 'Initialising...', fill = "BLUE", font = FONT_LARGE)
     if not no_lcd:
@@ -342,6 +380,12 @@ def main():
 
     #pool = Pool(processes=4,initializer=init_worker, initargs=(do_work, model_filename))
 
+    # start a thread that will perform motion detection
+    if streaming:
+        webThread = FlaskThread(args.streaming_port)
+        webThread.daemon = True
+        webThread.start()
+    
     sleeptext = False
     try:
         while running:
@@ -509,6 +553,51 @@ def main():
         copybackbuf()
         if not no_lcd:
             LCD.LCD_Clear()
+
+@webApp.route("/")
+def index():
+    # return the rendered template
+    return render_template("index.html")
+
+def generate():
+    # grab global references to the output frame and lock variables
+    global webFrame, webLock, webCondition, sleeping
+
+    # loop over frames from the output stream
+    while True:
+        time.sleep(0.5)
+        # wait until the lock is acquired
+        with webLock:
+            webCondition.wait()
+            # check if the output frame is available, otherwise skip
+            # the iteration of the loop
+            if webFrame is None:
+                continue
+
+            t1=time.time()
+            # encode the frame in JPEG format
+            (flag, encodedImage) = cv2.imencode(".jpg", webFrame)
+            t2=time.time()
+            #print("imencode={:.0f}ms".format((t2-t1)*1000))
+
+            # ensure the frame was successfully encoded
+            if not flag:
+                continue
+
+        # yield the output frame in the byte format
+        t1=time.time()
+        yield(b'--frame\r\n' b'Content-Type: image/jpeg\r\n\r\n' +
+                bytearray(encodedImage) + b'\r\n')
+        t2=time.time()
+        #print("yield={:.0f}ms".format((t2-t1)*1000))
+
+
+@webApp.route("/video_feed")
+def video_feed():
+    # return the response generated along with the specific media
+    # type (mime type)
+    return Response(generate(),
+            mimetype = "multipart/x-mixed-replace; boundary=frame")
 
 if __name__ == '__main__':
     main()
