@@ -32,6 +32,8 @@ from tools import generate_detections as gdet
 from deep_sort.detection import Detection as ddet
 import threading
 from multiprocessing import Pool
+import socket
+import selectors
 
 warnings.filterwarnings('ignore')
 
@@ -95,15 +97,66 @@ COLOR_MODE = None
 
 no_framebuf = False
 
+running = True
+sleeping = False
+delcount=0
+intcount=0
+poscount=0
+negcount=0
+perfmsgs=[]
+
 def capthread_f(cap, box):
+    global sleeping
     while True:
+        if sleeping:
+            time.sleep(0.2)
+            continue
         ret, frame = cap.read()
         box.set_message(frame)
 
 def clamp(minvalue, value, maxvalue):
     return max(minvalue, min(value, maxvalue))
 
+def readcmd(conn, mask):
+    global sleeping, running, delcount, intcount, poscount, negcount, perfmsgs
+    data, client = conn.recvfrom(1000)
+    if not data:
+        return
+    cmd = data.decode('utf-8').strip().split()
+    if len(cmd) == 0:
+        return
+
+    cmd0 = cmd[0].lower()
+
+    response = 'OK'
+    if cmd0 == 'quit':
+        running = False
+    elif cmd0 == 'sleep':
+        sleeping = True
+    elif cmd0 == 'wake':
+        sleeping = False
+    elif cmd0 == 'reset':
+        delcount=0
+        intcount=0
+        poscount=0
+        negcount=0
+    elif cmd0 == 'stat' or cmd0 == 'stats' or cmd0 == 'status':
+        response  = "Deleted track count: {}\n".format(delcount)
+        response += "Intersected track count: |{} - {}| = {}\n".format(poscount,negcount,intcount)
+        response += 'OK'
+    elif cmd0 == 'perf':
+        response = '\n'.join(perfmsgs)
+    else:
+        response = 'Command not recognised.'
+
+    response += '\n'
+
+    conn.sendto(response.encode('utf-8'), client)
+
+
 def main():
+    global running, sleeping, perfmsgs
+    global delcount, intcount, poscount, negcount
     global no_framebuf, no_lcd
     basedir = os.getenv('DEEPSORTHOME','.')
 
@@ -135,8 +188,20 @@ def main():
                         metavar='PATH', default=basedir)
     parser.add_argument('--camera-flip', help='Flip the camera image vertically',
                         default=True, type=bool)
+    parser.add_argument('--control-socket', help='Path to UNIX socket for control console.',
+                        default='/tmp/live-counter.sock')
     args = parser.parse_args()
     basedir = args.deepsorthome
+
+    socket_path = args.control_socket
+    if os.path.exists(socket_path):
+        os.remove(socket_path)
+
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+    server.bind(socket_path)
+    server.setblocking(False)
+    sel = selectors.DefaultSelector()
+    sel.register(server, selectors.EVENT_READ, readcmd)
 
     no_framebuf = args.no_framebuf
 
@@ -203,6 +268,21 @@ def main():
         nonlocal ratiosFBF
         return font['fbf'].getsize(txt) / ratiosFBF
 
+    def copybackbuf():
+        global no_lcd, no_framebuf, COLOR_MODE
+        nonlocal screenbuf, framebuf, args
+        if not no_lcd:
+            LCD.display(screenbuf) #50ms (RPi3)
+        if not no_framebuf:
+            framearray=np.array(framebuf)
+            if COLOR_MODE is not None:
+                fbframe16 = cv2.cvtColor(framearray, COLOR_MODE)
+            else:
+                fbframe16 = framearray
+            with open(args.framebuffer, 'wb') as buf:
+               buf.write(fbframe16)
+
+
     drawtext((100, 100), 'Initialising...', fill = "BLUE", font = FONT_LARGE)
     if not no_lcd:
         LCD.display(screenbuf) # force initial drawing on LCD
@@ -232,13 +312,9 @@ def main():
                                                        nn_budget)
     tracker = Tracker(metric,max_iou_distance=args.max_iou_distance,
                       max_age=args.max_age)
-    delcount=0
-    intcount=0
-    poscount=0
-    negcount=0
     db = {}
     def check_track(i):
-        nonlocal delcount
+        global delcount
         nonlocal ratios
         nonlocal cameracountline
         if i in db and len(db[i]) > 1:
@@ -266,8 +342,22 @@ def main():
 
     #pool = Pool(processes=4,initializer=init_worker, initargs=(do_work, model_filename))
 
+    sleeptext = False
     try:
-        while True:
+        while running:
+            events = sel.select(0)
+            for key, mask in events:
+                callback = key.data
+                callback(key.fileobj, mask)
+            if sleeping:
+                if not sleeptext:
+                    drawtext((10,int(DISPLAY_HEIGHT/2)),'sleeping...', fill=(255,255,255), font=FONT_LARGE)
+                    copybackbuf()
+                    sleeptext = True
+                time.sleep(0.2)
+                continue
+            sleeptext = False
+
             t1 = time.time()
             t1read = time.time()
             #while True:
@@ -286,7 +376,7 @@ def main():
                 frame = cv2.flip(frame, 0)
 
             #ret, frame = cap.read()
-            image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGRA2RGB))
+            image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGRA2RGBA))
             t2read = time.time()
         
             t1objd = time.time()
@@ -394,21 +484,17 @@ def main():
                 frameTimeMsg = "{:.0f}ms".format(frameTime*1000)
                 (dx, dy) = textsize(frameTimeMsg, font = FONT_TINY)
                 drawtext((CAMERA_WIDTH-dx, 0), frameTimeMsg, fill=(0,0,255), font=FONT_TINY)
-            if not no_lcd:
-                LCD.display(screenbuf) #50ms (RPi3)
-            if not no_framebuf:
-                framearray=np.array(framebuf)
-                if COLOR_MODE is not None:
-                    fbframe16 = cv2.cvtColor(framearray, COLOR_MODE)
-                else:
-                    fbframe16 = framearray
-                with open(args.framebuffer, 'wb') as buf:
-                   buf.write(fbframe16)
+            copybackbuf()
+
             t2draw = time.time()
             t2 = time.time()
             frameTime = t2 - t1
 
-            print("Frame processing time={:.0f}ms (read={:.0f}ms objd={:.0f}ms prep={:.0f}ms feat={:.0f}ms trac={:.0f}ms draw={:.0f}ms)".format(1000*(t2 - t1), 1000*(t2read - t1read), 1000*(t2objd - t1objd), 1000*(t2prep - t1prep), 1000*(t2feat - t1feat), 1000*(t2trac - t1trac), 1000*(t2draw - t1draw)))
+            msg = ("Frame processing time={:.0f}ms (read={:.0f}ms objd={:.0f}ms prep={:.0f}ms feat={:.0f}ms trac={:.0f}ms draw={:.0f}ms)".format(1000*(t2 - t1), 1000*(t2read - t1read), 1000*(t2objd - t1objd), 1000*(t2prep - t1prep), 1000*(t2feat - t1feat), 1000*(t2trac - t1trac), 1000*(t2draw - t1draw)))
+            print(msg)
+            perfmsgs.append(msg)
+            if len(perfmsgs) > 10:
+                perfmsgs = perfmsgs[-10:]
 
             if cv2.waitKey(1) & 0xff == ord('q'):
                 break
@@ -420,17 +506,9 @@ def main():
         print(delcount)
 
     finally:
+        copybackbuf()
         if not no_lcd:
             LCD.LCD_Clear()
-        if not no_framebuf:
-            framearray=np.array(framebuf)
-            framearray[:,:] = 0
-            if COLOR_MODE is not None:
-                fbframe16 = cv2.cvtColor(framearray, COLOR_MODE)
-            else:
-                fbframe16 = framearray
-            with open(args.framebuffer, 'wb') as buf:
-               buf.write(fbframe16)
 
 if __name__ == '__main__':
     main()
