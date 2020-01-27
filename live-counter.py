@@ -152,7 +152,8 @@ def readcmd(conn, mask):
         negcount=0
     elif cmd0 == 'stat' or cmd0 == 'stats' or cmd0 == 'status':
         response  = "Deleted track count: {}\n".format(delcount)
-        response += "Intersected track count: |{} - {}| = {}\n".format(poscount,negcount,intcount)
+        response += "Intersected track count: {}\n".format(intcount)
+        response += "Directional count: |{} - {}| = {}\n".format(negcount,poscount,abs(negcount-poscount))
         response += 'OK'
     elif cmd0 == 'perf':
         response = '\n'.join(perfmsgs)
