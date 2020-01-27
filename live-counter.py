@@ -72,8 +72,11 @@ DISPLAY_HEIGHT = 128               # LCD panel height
 CAMERA_WIDTH = 640
 CAMERA_HEIGHT = 480
 
-FRAMEBUF_WIDTH = 480
-FRAMEBUF_HEIGHT = 320
+FRAMEBUF_WIDTH = 640
+FRAMEBUF_HEIGHT = 480
+
+#COLOR_MODE = cv2.COLOR_RGBA2BGR565
+COLOR_MODE = None
 
 no_framebuf = False
 
@@ -92,26 +95,45 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--line', '-L', help="counting line: x1,y1,x2,y2",
                         default=None)
-    parser.add_argument('--model', help='File path of .tflite file.', required=True)
+    parser.add_argument('--model', help='File path of object detection .tflite file.',
+                        required=True)
+    parser.add_argument('--encoder-model', help='File path of feature encoder .pb file.',
+                        required=False)
     parser.add_argument('--labels', help='File path of labels file.', required=True)
     parser.add_argument('--no-framebuf', help='Disable framebuffer display',
                         required=False, action='store_true')
     parser.add_argument('--framebuffer', '-F', help='Framebuffer device',
-                        default='/dev/fb1', metavar='DEVICE')
+                        default='/dev/fb0', metavar='DEVICE')
+    parser.add_argument('--color-mode', help='Color mode for framebuffer, default: RGBA (see OpenCV docs)',
+                        default=None, metavar='MODE')
     parser.add_argument('--max-cosine-distance', help='Max cosine distance', metavar='N',
-                        default=0.3)
+                        default=0.6, type=float)
     parser.add_argument('--nms-max-overlap', help='Non-Max-Suppression max overlap', metavar='N',
-                        default=1.0)
+                        default=1.0, type=float)
     parser.add_argument('--max-iou-distance', help='Max Intersection-Over-Union distance',
-                        metavar='N', default=0.7)
+                        metavar='N', default=0.7, type=float)
     parser.add_argument('--max-age', help='Max age of lost track', metavar='N',
-                        default=10)
+                        default=10, type=int)
+    parser.add_argument('--num-threads', '-N', help='Number of threads for tensorflow lite',
+                        metavar='N', default=4, type=int)
     parser.add_argument('--deepsorthome', help='Location of model_data directory',
                         metavar='PATH', default=basedir)
+    parser.add_argument('--camera-flip', help='Flip the camera image vertically',
+                        default=True, type=bool)
     args = parser.parse_args()
     basedir = args.deepsorthome
 
     no_framebuf = args.no_framebuf
+
+    if args.color_mode == 'RGBA' or args.color_mode is None:
+        COLOR_MODE = None
+    elif args.color_mode == 'BGRA':
+        COLOR_MODE = cv2.COLOR_RGBA2BGRA
+    elif args.color_mode == 'BGR565':
+        COLOR_MODE = cv2.COLOR_RGBA2BGR565
+    else:
+        COLOR_MODE = None
+        print("Unsupported --color-mode={}".format(args.color_mode))
 
     ##################################################
     # Initialise LCD
@@ -182,9 +204,14 @@ def main():
     nn_budget = None
     nms_max_overlap = args.nms_max_overlap
     
-   # deep_sort 
-    model_filename = '{}/model_data/mars-small128.pb'.format(basedir)
-    encoder = gdet.create_box_encoder(model_filename,batch_size=1)
+    # deep_sort 
+    if args.encoder_model is None:
+        model_filename = '{}/mars-64x32x3.pb'.format(basedir)
+    else:
+        model_filename = args.encoder_model
+
+    #model_filename = '{}/model_data/mars-small128.pb'.format(basedir)
+    encoder = gdet.create_box_encoder(model_filename,batch_size=32)
     
     metric = nn_matching.NearestNeighborDistanceMetric("cosine", max_cosine_distance,
                                                        nn_budget)
@@ -236,6 +263,10 @@ def main():
             frame = None
             while frame is None:
                 frame = box.get_message()
+
+            # the camera is mounted upside down currently
+            if args.camera_flip:
+                frame = cv2.flip(frame, 0)
 
             #ret, frame = cap.read()
             image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGRA2RGB))
@@ -343,7 +374,10 @@ def main():
                 LCD.display(screenbuf) #50ms (RPi3)
             if not no_framebuf:
                 framearray=np.array(framebuf)
-                fbframe16 = cv2.cvtColor(framearray, cv2.COLOR_RGBA2BGR565)
+                if COLOR_MODE is not None:
+                    fbframe16 = cv2.cvtColor(framearray, COLOR_MODE)
+                else:
+                    fbframe16 = framearray
                 with open(args.framebuffer, 'wb') as buf:
                    buf.write(fbframe16)
             t2draw = time.time()
@@ -367,7 +401,10 @@ def main():
         if not no_framebuf:
             framearray=np.array(framebuf)
             framearray[:,:] = 0
-            fbframe16 = cv2.cvtColor(framearray, cv2.COLOR_RGBA2BGR565)
+            if COLOR_MODE is not None:
+                fbframe16 = cv2.cvtColor(framearray, COLOR_MODE)
+            else:
+                fbframe16 = framearray
             with open(args.framebuffer, 'wb') as buf:
                buf.write(fbframe16)
 
