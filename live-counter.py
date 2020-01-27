@@ -31,8 +31,23 @@ from deep_sort.tracker import Tracker
 from tools import generate_detections as gdet
 from deep_sort.detection import Detection as ddet
 import threading
+from multiprocessing import Pool
 
 warnings.filterwarnings('ignore')
+
+class Encoder(object):
+    def __init__(self, encoder, frame):
+        self.encoder = encoder
+        self.frame = frame
+
+    def __call__(self, box):
+        return self.encoder(self.frame, [self.box])[0]
+
+def init_worker(fn, model_filename):
+    fn.encoder = gdet.create_box_encoder(model_filename,batch_size=1)
+def do_work(args):
+    frame, box = args
+    return do_work.encoder(frame, [box])[0]
 
 class SigTerm(SystemExit): pass
 def sigterm(sig,frm): raise SigTerm
@@ -249,6 +264,8 @@ def main():
     capthread = threading.Thread(target=capthread_f, args=(cap,box), daemon=True)
     capthread.start()
 
+    #pool = Pool(processes=4,initializer=init_worker, initargs=(do_work, model_filename))
+
     try:
         while True:
             t1 = time.time()
@@ -295,7 +312,14 @@ def main():
             # print("box_num",len(boxs))
             t1feat = time.time()
             #frame = np.array(image)
+
+            # default
             features = encoder(frame,boxs)
+
+            # attempted parallel version
+            #frameBoxs = [(frame, box) for box in boxs]
+            #features = np.array(pool.map(do_work, frameBoxs))
+
             t2feat = time.time()
         
             # score to 1.0 here).
