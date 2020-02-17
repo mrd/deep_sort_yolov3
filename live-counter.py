@@ -100,6 +100,7 @@ FRAMEBUF_HEIGHT = 480
 COLOR_MODE = None
 
 no_framebuf = False
+no_framebuf_device = False
 
 running = True
 sleeping = False
@@ -302,7 +303,7 @@ def main():
         return font['fbf'].getsize(txt) / ratiosFBF
 
     def copybackbuf():
-        global no_lcd, no_framebuf, COLOR_MODE, webFrame, webLock, webCondition, streaming
+        global no_lcd, no_framebuf, no_framebuf_device, COLOR_MODE, webFrame, webLock, webCondition, streaming
         global streamFilename
         nonlocal screenbuf, framebuf, args
         if not no_lcd:
@@ -313,8 +314,13 @@ def main():
                 fbframe16 = cv2.cvtColor(framearray, COLOR_MODE)
             else:
                 fbframe16 = framearray
-            with open(args.framebuffer, 'wb') as buf:
-               buf.write(fbframe16)
+            if not no_framebuf_device:
+                try:
+                    with open(args.framebuffer, 'wb') as buf:
+                       buf.write(fbframe16)
+                except:
+                    print('failed to write to framebuffer...disabling it.')
+                    no_framebuf_device = True
             if streamFilename is not None:
                 cv2.imwrite(streamFilename, fbframe16)
         if streaming:
