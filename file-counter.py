@@ -20,9 +20,10 @@ from PIL import ImageDraw
 from PIL import ImageFont
 from PIL import ImageColor
 from PIL import Image
-#from yolo import YOLO
+from yolo import YOLO
 #from yolo_v3_tflite import YOLO_TFLITE
 from ssd_mobilenet import SSD_MOBILENET
+import ssd_mobilenetv3
 from intersection import any_intersection, intersection
 
 from deep_sort import preprocessing
@@ -185,8 +186,15 @@ def main():
     parser.add_argument('--deepsorthome', help='Location of model_data directory',
                         metavar='PATH', default=basedir)
     parser.add_argument('--camera-flip', help='Flip the camera image vertically',
-                        default=False, type=bool)
-
+                        default=False, action='store_true')
+    parser.add_argument('--mobilenetv3', help='Use v3 interpretation',
+                        default=False, action='store_true')
+    parser.add_argument('--yolo', help='Use yolo',
+                        default=False, action='store_true')
+    parser.add_argument('--counts-file', help='File to store counts data in',
+                        default=None)
+    parser.add_argument('--counts-time-offset', help='Offset count output by N secs',
+                        metavar='N', default=None, type=int)
     args = parser.parse_args()
     basedir = args.deepsorthome
 
@@ -265,21 +273,32 @@ def main():
             outputframe = cv2.cvtColor(framearray, COLOR_MODE)
         else:
             outputframe = framearray
-        outputframe = cv2.cvtColor(outputframe, cv2.COLOR_BGRA2RGB)
+        outputframe = cv2.cvtColor(outputframe, cv2.COLOR_RGBA2RGB)
         out.write(outputframe)
+        cv2.imshow('main', outputframe)
 
 
     ##################################################
     if no_framebuf:
         drawFBF = None
 
-    objd = SSD_MOBILENET(wanted_label='person', model_file=args.model, label_file=args.labels, num_threads=int(args.num_threads))
-    #objd = YOLO_TFLITE()
+    if args.yolo:
+        objd = YOLO()
+        args.model = '{}/model_data/yolo.h5'.format(basedir)
+        #objd = YOLO_TFLITE()
+    else:
+        if args.mobilenetv3:
+            cls = ssd_mobilenetv3.SSD_MOBILENET
+        else:
+            cls = SSD_MOBILENET
+        objd = cls(wanted_label='person', model_file=args.model, label_file=args.labels, num_threads=int(args.num_threads))
 
    # Definition of the parameters
     max_cosine_distance = args.max_cosine_distance
     nn_budget = None
     nms_max_overlap = args.nms_max_overlap
+    max_iou_distance=args.max_iou_distance
+    max_age=args.max_age
 
     # deep_sort
     if args.encoder_model is None:
@@ -292,8 +311,9 @@ def main():
 
     metric = nn_matching.NearestNeighborDistanceMetric("cosine", max_cosine_distance,
                                                        nn_budget)
-    tracker = Tracker(metric,max_iou_distance=args.max_iou_distance,
-                      max_age=args.max_age)
+    tracker = Tracker(metric,max_iou_distance=max_iou_distance,max_age=max_age)
+    print(" max_cosine_distance={}\n nms_max_overlap={}\n max_iou_distance={}\n max_age={}\n model_file={}\n encoder_model_filename={}\n label_file={}\n".format(max_cosine_distance, nms_max_overlap, max_iou_distance, max_age, args.model, model_filename, args.labels))
+
     db = {}
     def check_track(i):
         global delcount
@@ -322,8 +342,14 @@ def main():
     out = cv2.VideoWriter(args.output,fourcc, fps, (640,480))
 
     frameno = 0
-    
+
     try:
+        fc = None
+        if args.counts_file is not None:
+            fc = open(args.counts_file, 'w')
+            fc_offset = args.counts_time_offset
+            if fc_offset is None:
+                fc_offset = 0
         while running:
             t1 = time.time()
             t1read = time.time()
@@ -332,8 +358,6 @@ def main():
             if not ret:
                 break
             frame = cv2.resize(frame, (CAMERA_WIDTH, CAMERA_HEIGHT)) # pretend it's a camera
-            frameno += 1
-
 
             # the camera is mounted upside down currently
             if args.camera_flip:
@@ -465,13 +489,30 @@ def main():
             if cv2.waitKey(1) & 0xff == ord('q'):
                 break
 
+            if fc is not None and (frameno-int(fc_offset*fps)) % int(fps*10) == 0:
+                ts = int(frameno / fps)
+                mins = int(ts / 60)
+                secs = ts % 60
+                fc.write("{:02d}:{:02d},{},{},{},{},{}\n".format(mins,secs,negcount,abs(negcount-poscount),poscount,intcount,delcount))
+                fc.flush()
+
+            frameno += 1
+
+
 
         for track in tracker.tracks:
             check_track(track.track_id)
 
-        print(delcount)
+        print("{},{},{},{},{}".format(negcount,abs(negcount-poscount),poscount,intcount,delcount))
+        if fc is not None:
+            ts = int(frameno / fps)
+            mins = int(ts / 60)
+            secs = ts % 60
+            fc.write("{:02d}:{:02d},{},{},{},{},{}\n".format(mins,secs,negcount,abs(negcount-poscount),poscount,intcount,delcount))
 
     finally:
+        if fc is not None:
+            fc.close()
         cap.release()
         out.release()
         cv2.destroyAllWindows()
