@@ -195,6 +195,9 @@ def main():
                         default=None)
     parser.add_argument('--counts-time-offset', help='Offset count output by N secs',
                         metavar='N', default=None, type=int)
+    parser.add_argument('--sim-fps', help='Simulate frames-per-second',
+                        metavar='N', default=None, type=int)
+
     args = parser.parse_args()
     basedir = args.deepsorthome
 
@@ -275,7 +278,7 @@ def main():
             outputframe = framearray
         outputframe = cv2.cvtColor(outputframe, cv2.COLOR_RGBA2RGB)
         out.write(outputframe)
-        cv2.imshow('main', outputframe)
+        # cv2.imshow('main', outputframe)
 
 
     ##################################################
@@ -342,6 +345,7 @@ def main():
     out = cv2.VideoWriter(args.output,fourcc, fps, (640,480))
 
     frameno = 0
+    skipframes = 0.0
 
     try:
         fc = None
@@ -358,133 +362,138 @@ def main():
             if not ret:
                 break
             frame = cv2.resize(frame, (CAMERA_WIDTH, CAMERA_HEIGHT)) # pretend it's a camera
+            if skipframes < 1.0:
+                # the camera is mounted upside down currently
+                if args.camera_flip:
+                    frame = cv2.flip(frame, 0)
 
-            # the camera is mounted upside down currently
-            if args.camera_flip:
-                frame = cv2.flip(frame, 0)
+                #image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGRA2RGBA))
+                image = Image.fromarray(frame)
 
-            #image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGRA2RGBA))
-            image = Image.fromarray(frame)
+                t2read = time.time()
 
-            t2read = time.time()
+                t1objd = time.time()
+                boxs = objd.detect_image(image)
+                # boxs is in tlwh format
+                t2objd = time.time()
 
-            t1objd = time.time()
-            boxs = objd.detect_image(image)
-            # boxs is in tlwh format
-            t2objd = time.time()
+                # set background image and clear screen
+                t1bclr = time.time()
+                # clear both screens
+                drawrect([0,0,CAMERA_WIDTH,CAMERA_HEIGHT], fill=0, outline=0)
+                # also blit camera image onto LCD screen
+                if not no_lcd:
+                    screenbuf.paste(image.resize((DISPLAY_WIDTH, DISPLAY_HEIGHT)))
+                if not no_framebuf:
+                    #maskimg = Image.fromarray(fgMask)
+                    framebuf.paste(image.resize((FRAMEBUF_WIDTH, FRAMEBUF_HEIGHT)))
 
-            # set background image and clear screen
-            t1bclr = time.time()
-            # clear both screens
-            drawrect([0,0,CAMERA_WIDTH,CAMERA_HEIGHT], fill=0, outline=0)
-            # also blit camera image onto LCD screen
-            if not no_lcd:
-                screenbuf.paste(image.resize((DISPLAY_WIDTH, DISPLAY_HEIGHT)))
-            if not no_framebuf:
-                #maskimg = Image.fromarray(fgMask)
-                framebuf.paste(image.resize((FRAMEBUF_WIDTH, FRAMEBUF_HEIGHT)))
+                t2bclr = time.time()
 
-            t2bclr = time.time()
+                # features and tracking get more expensive as there are more things to track
+                # writes to disk are fairly substantial as well
 
-            # features and tracking get more expensive as there are more things to track
-            # writes to disk are fairly substantial as well
+                # print("box_num",len(boxs))
+                t1feat = time.time()
+                #frame = np.array(image)
 
-            # print("box_num",len(boxs))
-            t1feat = time.time()
-            #frame = np.array(image)
+                # default
+                features = encoder(frame,boxs)
 
-            # default
-            features = encoder(frame,boxs)
+                # attempted parallel version
+                #frameBoxs = [(frame, box) for box in boxs]
+                #features = np.array(pool.map(do_work, frameBoxs))
 
-            # attempted parallel version
-            #frameBoxs = [(frame, box) for box in boxs]
-            #features = np.array(pool.map(do_work, frameBoxs))
+                t2feat = time.time()
 
-            t2feat = time.time()
+                # score to 1.0 here).
+                detections = [Detection(bbox, 1.0, feature) for bbox, feature in zip(boxs, features)]
 
-            # score to 1.0 here).
-            detections = [Detection(bbox, 1.0, feature) for bbox, feature in zip(boxs, features)]
+                # Run non-maxima suppression.
+                t1prep = time.time()
+                boxes = np.array([d.tlwh for d in detections])
+                scores = np.array([d.confidence for d in detections])
+                indices = preprocessing.non_max_suppression(boxes, nms_max_overlap, scores)
+                detections = [detections[i] for i in indices]
+                t2prep = time.time()
 
-            # Run non-maxima suppression.
-            t1prep = time.time()
-            boxes = np.array([d.tlwh for d in detections])
-            scores = np.array([d.confidence for d in detections])
-            indices = preprocessing.non_max_suppression(boxes, nms_max_overlap, scores)
-            detections = [detections[i] for i in indices]
-            t2prep = time.time()
+                # Call the tracker
+                t1trac = time.time()
+                tracker.predict()
+                tracker.update(detections)
+                a = (cameracountline[0,0], cameracountline[0,1])
+                b = (cameracountline[1,0], cameracountline[1,1])
+                drawline([a, b], fill=(0,0,255), width=3)
 
-            # Call the tracker
-            t1trac = time.time()
-            tracker.predict()
-            tracker.update(detections)
-            a = (cameracountline[0,0], cameracountline[0,1])
-            b = (cameracountline[1,0], cameracountline[1,1])
-            drawline([a, b], fill=(0,0,255), width=3)
+                for track in tracker.deleted_tracks:
+                    i = track.track_id
+                    if track.is_deleted():
+                        check_track(track.track_id)
 
-            for track in tracker.deleted_tracks:
-                i = track.track_id
-                if track.is_deleted():
-                    check_track(track.track_id)
+                for track in tracker.tracks:
+                    i = track.track_id
+                    if not track.is_confirmed() or track.time_since_update > 1:
+                        continue
+                    if i not in db:
+                        db[i] = []
+                    db[i].append(track.mean[:2].copy())
+                    if len(db[i]) > 1:
+                        pts = (np.array(db[i]).reshape((-1,1,2))).reshape(-1)
+                        drawline(pts, fill=(255,0,255), width=3)
+                        p1 = cameracountline[0]
+                        q1 = cameracountline[1]
+                        p2 = np.array(db[i][-1])
+                        q2 = np.array(db[i][-2])
+                        cp = np.cross(q1 - p1,q2 - p2)
+                        if intersection(p1,q1,p2,q2):
+                            intcount+=1
+                            print("track_id={} just intersected camera countline; cross-prod={}; intcount={}".format(i,cp,intcount))
+                            drawline(pts[-4:], fill=(0,0,255), width=5)
+                            if cp >= 0:
+                                poscount+=1
+                            else:
+                                negcount+=1
 
-            for track in tracker.tracks:
-                i = track.track_id
-                if not track.is_confirmed() or track.time_since_update > 1:
-                    continue
-                if i not in db:
-                    db[i] = []
-                db[i].append(track.mean[:2].copy())
-                if len(db[i]) > 1:
-                    pts = (np.array(db[i]).reshape((-1,1,2))).reshape(-1)
-                    drawline(pts, fill=(255,0,255), width=3)
-                    p1 = cameracountline[0]
-                    q1 = cameracountline[1]
-                    p2 = np.array(db[i][-1])
-                    q2 = np.array(db[i][-2])
-                    cp = np.cross(q1 - p1,q2 - p2)
-                    if intersection(p1,q1,p2,q2):
-                        intcount+=1
-                        print("track_id={} just intersected camera countline; cross-prod={}; intcount={}".format(i,cp,intcount))
-                        drawline(pts[-4:], fill=(0,0,255), width=5)
-                        if cp >= 0:
-                            poscount+=1
-                        else:
-                            negcount+=1
+                    bbox = track.to_tlbr()
+                    drawrect(bbox,outline=(255,255,255))
+                    drawtext(bbox[:2],str(track.track_id), fill=(0,255,0), font=FONT_SMALL)
 
-                bbox = track.to_tlbr()
-                drawrect(bbox,outline=(255,255,255))
-                drawtext(bbox[:2],str(track.track_id), fill=(0,255,0), font=FONT_SMALL)
+                for det in detections:
+                    bbox = det.to_tlbr()
+                    drawrect(bbox,outline=(255,0,0))
 
-            for det in detections:
-                bbox = det.to_tlbr()
-                drawrect(bbox,outline=(255,0,0))
+                t2trac = time.time()
 
-            t2trac = time.time()
+                t1draw = time.time()
 
-            t1draw = time.time()
+                # draw counters along bottom of screen(s)
+                (_, dy) = textsize(str(negcount), font = FONT_LARGE)
+                drawtext((0, CAMERA_HEIGHT-dy), str(negcount), fill=(255,0,0), font=FONT_LARGE)
+                (dx, dy) = textsize(str(abs(negcount-poscount)), font = FONT_LARGE)
+                drawtext(((CAMERA_WIDTH-dx)/2, CAMERA_HEIGHT-dy), str(abs(negcount-poscount)), fill=(0,255,0), font=FONT_LARGE)
+                (dx, dy) = textsize(str(poscount), font = FONT_LARGE)
+                drawtext((CAMERA_WIDTH-dx, CAMERA_HEIGHT-dy), str(poscount), fill=(0,0,255), font=FONT_LARGE)
 
-            # draw counters along bottom of screen(s)
-            (_, dy) = textsize(str(negcount), font = FONT_LARGE)
-            drawtext((0, CAMERA_HEIGHT-dy), str(negcount), fill=(255,0,0), font=FONT_LARGE)
-            (dx, dy) = textsize(str(abs(negcount-poscount)), font = FONT_LARGE)
-            drawtext(((CAMERA_WIDTH-dx)/2, CAMERA_HEIGHT-dy), str(abs(negcount-poscount)), fill=(0,255,0), font=FONT_LARGE)
-            (dx, dy) = textsize(str(poscount), font = FONT_LARGE)
-            drawtext((CAMERA_WIDTH-dx, CAMERA_HEIGHT-dy), str(poscount), fill=(0,0,255), font=FONT_LARGE)
+                if frameTime != 0:
+                    frameTimeMsg = "{:.0f}ms".format(frameTime*1000)
+                    (dx, dy) = textsize(frameTimeMsg, font = FONT_TINY)
+                    drawtext((CAMERA_WIDTH-dx, 0), frameTimeMsg, fill=(0,0,255), font=FONT_TINY)
+                copybackbuf(out)
 
-            if frameTime != 0:
-                frameTimeMsg = "{:.0f}ms".format(frameTime*1000)
-                (dx, dy) = textsize(frameTimeMsg, font = FONT_TINY)
-                drawtext((CAMERA_WIDTH-dx, 0), frameTimeMsg, fill=(0,0,255), font=FONT_TINY)
-            copybackbuf(out)
+                t2draw = time.time()
+                t2 = time.time()
+                frameTime = t2 - t1
 
-            t2draw = time.time()
-            t2 = time.time()
-            frameTime = t2 - t1
-
-            msg = ("Frame processing time={:.0f}ms (read={:.0f}ms objd={:.0f}ms prep={:.0f}ms feat={:.0f}ms trac={:.0f}ms draw={:.0f}ms)".format(1000*(t2 - t1), 1000*(t2read - t1read), 1000*(t2objd - t1objd), 1000*(t2prep - t1prep), 1000*(t2feat - t1feat), 1000*(t2trac - t1trac), 1000*(t2draw - t1draw)))
-            print(msg)
-            perfmsgs.append(msg)
-            if len(perfmsgs) > 10:
-                perfmsgs = perfmsgs[-10:]
+                msg = ("Frame processing time={:.0f}ms (read={:.0f}ms objd={:.0f}ms prep={:.0f}ms feat={:.0f}ms trac={:.0f}ms draw={:.0f}ms)".format(1000*(t2 - t1), 1000*(t2read - t1read), 1000*(t2objd - t1objd), 1000*(t2prep - t1prep), 1000*(t2feat - t1feat), 1000*(t2trac - t1trac), 1000*(t2draw - t1draw)))
+                print(msg)
+                perfmsgs.append(msg)
+                if len(perfmsgs) > 10:
+                    perfmsgs = perfmsgs[-10:]
+                if args.sim_fps is not None:
+                    skipframes += max(0, float(fps)/float(args.sim_fps) - 1.0)
+            else:
+                print('skip')
+                skipframes -= 1.0
 
             if cv2.waitKey(1) & 0xff == ord('q'):
                 break
