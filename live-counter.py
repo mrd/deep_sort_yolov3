@@ -104,7 +104,7 @@ no_framebuf_device = False
 
 running = True
 sleeping = False
-streaming = True
+streaming = False
 streamFilename = None
 webFrame = None
 webLock = None
@@ -326,6 +326,7 @@ def main():
         if streaming:
             with webLock:
                 webFrame = cv2.resize(np.array(framebuf),(320,240))
+                webFrame = cv2.cvtColor(webFrame, cv2.COLOR_BGRA2RGBA)
                 webCondition.notify()
 
     drawtext((100, 100), 'Initialising...', fill = "BLUE", font = FONT_LARGE)
