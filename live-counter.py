@@ -2,6 +2,11 @@
 # -*- coding: utf-8 -*-
 
 from __future__ import division, print_function, absolute_import
+mqtt_id = 'deepdish-huey'
+mqtt_host = 'cdbba'
+mqtt_user = 'csn-node'
+mqtt_pass = 'csn-node'
+mqtt_topic = 'csn/' + mqtt_id + '/SENSOR'
 no_lcd = True
 
 if not no_lcd:
@@ -15,6 +20,7 @@ import argparse
 import numpy as np
 import signal
 import cv2
+import json
 from PIL import ImageDraw
 from PIL import ImageFont
 from PIL import ImageColor
@@ -175,6 +181,13 @@ class FlaskThread(threading.Thread):
         global webApp
         webApp.run(host='0.0.0.0', port=self.port, debug=False, use_debugger=False,
                    use_reloader=False, threaded=True)
+
+def send_mqtt_msg(t):
+    global poscount, negcount
+    msg = json.dumps({'acp_ts': t, 'acp_id': mqtt_id, 'poscount': poscount, 'negcount': negcount, 'diff': poscount - negcount})
+    cmd = "mosquitto_pub -t '{}' -h '{}' -u '{}' -P '{}' -m '{}'".format(mqtt_topic,mqtt_host,mqtt_user,mqtt_pass,msg)
+    os.system(cmd)
+
 
 def main():
     global running, sleeping, perfmsgs, streaming, webFrame, webLock, webCondition
@@ -422,6 +435,7 @@ def main():
             frame = None
             while frame is None:
                 frame = box.get_message()
+            frameCapTime = time.time()
 
             # the camera is mounted upside down currently
             if args.camera_flip:
@@ -511,6 +525,7 @@ def main():
                             poscount+=1
                         else:
                             negcount+=1
+                        send_mqtt_msg(frameCapTime)
 
                 bbox = track.to_tlbr()
                 drawrect(bbox,outline=(255,255,255))
