@@ -406,7 +406,9 @@ def main():
         webThread = FlaskThread(args.streaming_port)
         webThread.daemon = True
         webThread.start()
-    
+
+    backSub = cv2.createBackgroundSubtractorMOG2()
+
     sleeptext = False
     try:
         while running:
@@ -441,12 +443,21 @@ def main():
             if args.camera_flip:
                 frame = cv2.flip(frame, 0)
 
+            fgMask = backSub.apply(frame)
+            #frame = cv2.bitwise_and(frame, frame, mask = fgMask)
             #ret, frame = cap.read()
             image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGRA2RGBA))
             t2read = time.time()
-        
+
             t1objd = time.time()
-            boxs = objd.detect_image(image)
+            boxs0 = objd.detect_image(image)
+            boxs = []
+            for (x,y,w,h) in boxs0:
+                #import pdb; pdb.set_trace()
+                x, y, w, h = int(x), int(y), int(w), int(h)
+                # check if the box includes any detected motion
+                if np.any(fgMask[x:x+w,y:y+h]):
+                    boxs.append((x,y,w,h))
             # boxs is in tlwh format
             t2objd = time.time()
 
@@ -458,6 +469,7 @@ def main():
             if not no_lcd:
                 screenbuf.paste(image.resize((DISPLAY_WIDTH, DISPLAY_HEIGHT)))
             if not no_framebuf:
+                #maskimg = Image.fromarray(fgMask)
                 framebuf.paste(image.resize((FRAMEBUF_WIDTH, FRAMEBUF_HEIGHT)))
 
             t2bclr = time.time()
