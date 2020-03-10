@@ -383,12 +383,12 @@ def main():
             db[i] = []
 
     if args.line is None:
-        w, h = DISPLAY_WIDTH, DISPLAY_HEIGHT
+        w, h = CAMERA_WIDTH, CAMERA_HEIGHT
         countline = np.array([[w/2,0],[w/2,h]],dtype=int)
     else:
         countline = np.array(list(map(int,args.line.strip().split(','))),dtype=int).reshape(2,2)
 
-    cameracountline = countline.astype(float) / ratios
+    cameracountline = countline.astype(float)
 
     fps = 0.0
     frameTime = 0
