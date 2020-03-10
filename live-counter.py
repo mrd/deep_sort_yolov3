@@ -520,7 +520,12 @@ def main():
                     continue
                 if i not in db:
                     db[i] = []
-                db[i].append(track.mean[:2].copy())
+
+                bbox = track.to_tlbr()
+                bottomCenter = np.array([(bbox[0] + bbox[2]) / 2.0, bbox[3]])
+                #db[i].append(track.mean[:2].copy())
+                db[i].append(bottomCenter)
+
                 if len(db[i]) > 1:
                     pts = (np.array(db[i]).reshape((-1,1,2))).reshape(-1)
                     drawline(pts, fill=(255,0,255), width=3)
@@ -539,7 +544,6 @@ def main():
                             negcount+=1
                         send_mqtt_msg(frameCapTime)
 
-                bbox = track.to_tlbr()
                 drawrect(bbox,outline=(255,255,255))
                 drawtext(bbox[:2],str(track.track_id), fill=(0,255,0), font=FONT_SMALL)
 
