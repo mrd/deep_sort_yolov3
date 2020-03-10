@@ -289,7 +289,7 @@ def main():
         if drawLCD is not None:
             xyl = list(np.int32(np.array(xy) * ratiosLCD))
             drawLCD.text(xyl, txt, fill=fill, font=font['lcd'])
-        if drawFBF is not None: 
+        if drawFBF is not None:
             xyf = list(np.int32(np.array(xy) * ratiosFBF))
             drawFBF.text(xyf, txt, fill=fill, font=font['fbf'])
 
@@ -298,7 +298,7 @@ def main():
         if drawLCD is not None:
             ptsl = list(np.int32(np.array(pts).reshape(-1,2) * ratiosLCD).reshape(-1))
             drawLCD.line(ptsl, fill = fill, width = width)
-        if drawFBF is not None: 
+        if drawFBF is not None:
             ptsf = list(np.int32(np.array(pts).reshape(-1,2) * ratiosFBF).reshape(-1))
             drawFBF.line(ptsf, fill = fill, width = width)
 
@@ -307,7 +307,7 @@ def main():
         if drawLCD is not None:
             ptsl = list(np.int32(np.array(pts).reshape(-1,2) * ratiosLCD).reshape(-1))
             drawLCD.rectangle(ptsl, fill = fill, outline = outline)
-        if drawFBF is not None: 
+        if drawFBF is not None:
             ptsf = list(np.int32(np.array(pts).reshape(-1,2) * ratiosFBF).reshape(-1))
             drawFBF.rectangle(ptsf, fill = fill, outline = outline)
 
@@ -357,8 +357,8 @@ def main():
     max_cosine_distance = args.max_cosine_distance
     nn_budget = None
     nms_max_overlap = args.nms_max_overlap
-    
-    # deep_sort 
+
+    # deep_sort
     if args.encoder_model is None:
         model_filename = '{}/mars-64x32x3.pb'.format(basedir)
     else:
@@ -366,7 +366,7 @@ def main():
 
     #model_filename = '{}/model_data/mars-small128.pb'.format(basedir)
     encoder = gdet.create_box_encoder(model_filename,batch_size=32)
-    
+
     metric = nn_matching.NearestNeighborDistanceMetric("cosine", max_cosine_distance,
                                                        nn_budget)
     tracker = Tracker(metric,max_iou_distance=args.max_iou_distance,
@@ -477,10 +477,10 @@ def main():
             #features = np.array(pool.map(do_work, frameBoxs))
 
             t2feat = time.time()
-        
+
             # score to 1.0 here).
             detections = [Detection(bbox, 1.0, feature) for bbox, feature in zip(boxs, features)]
-        
+
             # Run non-maxima suppression.
             t1prep = time.time()
             boxes = np.array([d.tlwh for d in detections])
@@ -488,7 +488,7 @@ def main():
             indices = preprocessing.non_max_suppression(boxes, nms_max_overlap, scores)
             detections = [detections[i] for i in indices]
             t2prep = time.time()
-        
+
             # Call the tracker
             t1trac = time.time()
             tracker.predict()
@@ -534,7 +534,7 @@ def main():
             for det in detections:
                 bbox = det.to_tlbr()
                 drawrect(bbox,outline=(255,0,0))
-            
+
             t2trac = time.time()
 
             t1draw = time.time()
@@ -565,7 +565,7 @@ def main():
 
             if cv2.waitKey(1) & 0xff == ord('q'):
                 break
-        
+
 
         for track in tracker.tracks:
             check_track(track.track_id)
