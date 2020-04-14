@@ -278,7 +278,7 @@ def main():
             outputframe = framearray
         outputframe = cv2.cvtColor(outputframe, cv2.COLOR_RGBA2RGB)
         out.write(outputframe)
-        # cv2.imshow('main', outputframe)
+        #cv2.imshow('main', outputframe)
 
 
     ##################################################
@@ -329,12 +329,12 @@ def main():
             db[i] = []
 
     if args.line is None:
-        w, h = DISPLAY_WIDTH, DISPLAY_HEIGHT
+        w, h = CAMERA_WIDTH, CAMERA_HEIGHT
         countline = np.array([[w/2,0],[w/2,h]],dtype=int)
     else:
         countline = np.array(list(map(int,args.line.strip().split(','))),dtype=int).reshape(2,2)
 
-    cameracountline = countline.astype(float) / ratios
+    cameracountline = countline.astype(float)
 
     frameTime = 0
 
@@ -417,10 +417,47 @@ def main():
                 detections = [detections[i] for i in indices]
                 t2prep = time.time()
 
+
                 # Call the tracker
                 t1trac = time.time()
                 tracker.predict()
                 tracker.update(detections)
+
+                def cd(u,v):
+                    return nn_matching._cosine_distance(np.expand_dims(u,axis=0),np.expand_dims(v,axis=0))[0,0]
+                    #return np.dot(u, v) / (np.sqrt(np.dot(u,u)) * np.sqrt(np.dot(v,v)))
+                def overlapping(d1,d2):
+                    r1 = d1.tlwh.copy()
+                    r1[2:] += d1.tlwh[:2]
+                    r2 = d2.tlwh.copy()
+                    r2[2:] += d2.tlwh[:2]
+                    hoverlaps = (r1[0] <= r2[2]) and (r1[2] >= r2[0])
+                    voverlaps = (r1[1] >= r2[3]) and (r1[3] <= r2[1])
+                    return hoverlaps and voverlaps
+                msg=""
+                for i1 in range(len(detections)):
+                    texty=0
+                    for i2 in range(i1+1,len(detections)):
+                        d1=detections[i1]
+                        d2=detections[i2]
+                        ti1 = getattr(d1,'track_id',None)
+                        ti2 = getattr(d2,'track_id',None)
+                        cdist = cd(d1.feature,d2.feature)
+                        if ti1 != ti2:
+                            #msg+=("{} :: {} = {}\n".format(ti1,ti2,cdist))
+                            pass
+                        #DEBUG
+                        # drawtext(d1.tlwh[:2] + [d1.tlwh[2],texty],str((int(d2.tlwh[0]),cdist)),fill=(255,255,255),font=FONT_TINY)
+                        texty+=20
+                print([(tar, len(metric.samples[tar])) for tar in metric.samples.keys()])
+                for d1 in detections:
+                    for ti2 in metric.samples.keys():
+                        ti1 = getattr(d1,'track_id',None)
+                        if ti1 is None:
+                            msg+=("det {} :: sample {} = {}\n".format(ti1, ti2, metric._metric(metric.samples[ti2], np.expand_dims(d1.feature,axis=0))))
+                print(msg)
+                #DEBUG
+                #drawtext([0,0],str(msg), fill=(255,255,255), font=FONT_TINY)
                 a = (cameracountline[0,0], cameracountline[0,1])
                 b = (cameracountline[1,0], cameracountline[1,1])
                 drawline([a, b], fill=(0,0,255), width=3)
